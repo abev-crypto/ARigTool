@@ -1,8 +1,24 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
 
+try:
+    from PySide2 import QtCore, QtWidgets
+    from shiboken2 import wrapInstance
+    import maya.OpenMayaUI as omui
+except Exception:  # pragma: no cover - Maya環境外ではUI関連モジュールが利用できない場合がある
+    QtCore = QtWidgets = omui = wrapInstance = None
 
-def create_twist_chain(count=4, name_tag="Twist"):
+
+def _maya_main_window():
+    if omui is None:
+        raise RuntimeError("Maya UI modules are not available.")
+    ptr = omui.MQtUtil.mainWindow()
+    if ptr is None:
+        raise RuntimeError("Mayaのメインウィンドウが取得できませんでした。")
+    return wrapInstance(int(ptr), QtWidgets.QWidget)
+
+
+def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2):
     sel = cmds.ls(sl=True, type="joint")
     if len(sel) < 2:
         cmds.error(u"開始ジョイント → 参照ジョイント の順に選択してください。")
@@ -28,6 +44,24 @@ def create_twist_chain(count=4, name_tag="Twist"):
             base_radius = cmds.getAttr(start + ".radius")
         except Exception:
             base_radius = 1.0
+
+    abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
+    cmds.setAttr(abs_neg + ".input2", -1)
+    cmds.connectAttr(pma_sub + ".output1D", abs_neg + ".input1", f=True)
+
+    cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
+    cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
+    cmds.setAttr(cond_abs + ".secondTerm", 0)
+    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".firstTerm", f=True)
+    cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
+    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".colorIfFalseR", f=True)
+
+    twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
+    cmds.setAttr(twist_range + ".minX", 0)
+    cmds.setAttr(twist_range + ".maxX", 1)
+    cmds.setAttr(twist_range + ".oldMinX", 0)
+    cmds.setAttr(twist_range + ".oldMaxX", 90)
+    cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
 
     created = []
     for i in range(1, count + 1):
@@ -64,7 +98,6 @@ def create_twist_chain(count=4, name_tag="Twist"):
                 pass
 
         md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{i:02d}_MD")
-        cmds.setAttr(md + ".input2", ratio)
         cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
 
         pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{i:02d}_PMA")
@@ -75,6 +108,36 @@ def create_twist_chain(count=4, name_tag="Twist"):
         cmds.connectAttr(pma_add + ".output1D", j + ".rotateX", f=True)
         for ax in ("Y", "Z"):
             cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
+
+        ratio_attr = "twistWeight"
+        if not cmds.attributeQuery(ratio_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=ratio_attr, at="double", min=0.0, dv=ratio)
+            cmds.setAttr(j + "." + ratio_attr, e=True, k=True)
+        cmds.setAttr(j + "." + ratio_attr, ratio)
+        cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
+
+        default_scale_max = (scale_at_90 - 1.0) * (count - i) + 1.0
+        scale_attr = "twistScaleMax"
+        if not cmds.attributeQuery(scale_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=default_scale_max)
+            cmds.setAttr(j + "." + scale_attr, e=True, k=True)
+        else:
+            cmds.setAttr(j + "." + scale_attr, default_scale_max)
+
+        delta_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{i:02d}_scaleDelta_ADL")
+        cmds.connectAttr(j + "." + scale_attr, delta_add + ".input1", f=True)
+        cmds.setAttr(delta_add + ".input2", -1)
+
+        scale_md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{i:02d}_scale_MD")
+        cmds.connectAttr(twist_range + ".outValueX", scale_md + ".input1", f=True)
+        cmds.connectAttr(delta_add + ".output", scale_md + ".input2", f=True)
+
+        scale_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{i:02d}_scale_ADL")
+        cmds.connectAttr(scale_md + ".output", scale_add + ".input1", f=True)
+        cmds.setAttr(scale_add + ".input2", 1)
+
+        cmds.connectAttr(scale_add + ".output", j + ".scaleY", f=True)
+        cmds.connectAttr(scale_add + ".output", j + ".scaleZ", f=True)
 
         created.append(j)
 
@@ -94,6 +157,173 @@ def create_twist_chain(count=4, name_tag="Twist"):
     cmds.select(created, r=True)
     print(u"[Twist] 作成:", created)
     return created
+
+
+def _list_twist_joints(base_joint):
+    children = cmds.listRelatives(base_joint, c=True, type="joint") or []
+    twist_joints = []
+    for child in children:
+        if cmds.attributeQuery("twistWeight", node=child, exists=True) and cmds.attributeQuery(
+            "twistScaleMax", node=child, exists=True
+        ):
+            twist_joints.append(child)
+    return twist_joints
+
+
+if QtWidgets is not None:
+
+    class TwistChainEditorDialog(QtWidgets.QDialog):
+        WINDOW_OBJECT_NAME = "twistChainEditorDialog"
+
+        def __init__(self, parent=None):
+            if parent is None:
+                parent = _maya_main_window()
+            super(TwistChainEditorDialog, self).__init__(parent)
+            self.setObjectName(self.WINDOW_OBJECT_NAME)
+            self.setWindowTitle(u"Twist Chain Editor")
+            self.setWindowFlags(self.windowFlags() ^ QtCore.Qt.WindowContextHelpButtonHint)
+
+            self._create_widgets()
+            self._create_layout()
+            self._create_connections()
+
+            self._refresh_data()
+
+        def _create_widgets(self):
+            self.info_label = QtWidgets.QLabel("")
+
+            self.table = QtWidgets.QTableWidget(0, 3)
+            headers = [u"Joint", u"Twist Weight", u"Scale Max"]
+            self.table.setHorizontalHeaderLabels(headers)
+            header = self.table.horizontalHeader()
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+            self.table.verticalHeader().setVisible(False)
+            self.table.setAlternatingRowColors(True)
+            self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+            self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+
+            self.refresh_button = QtWidgets.QPushButton(u"Refresh")
+            self.apply_button = QtWidgets.QPushButton(u"Apply")
+            self.close_button = QtWidgets.QPushButton(u"Close")
+
+        def _create_layout(self):
+            main_layout = QtWidgets.QVBoxLayout(self)
+            main_layout.addWidget(self.info_label)
+            main_layout.addWidget(self.table)
+
+            button_layout = QtWidgets.QHBoxLayout()
+            button_layout.addStretch(1)
+            button_layout.addWidget(self.refresh_button)
+            button_layout.addWidget(self.apply_button)
+            button_layout.addWidget(self.close_button)
+            main_layout.addLayout(button_layout)
+
+        def _create_connections(self):
+            self.refresh_button.clicked.connect(self._refresh_data)
+            self.apply_button.clicked.connect(self._apply_changes)
+            self.close_button.clicked.connect(self.close)
+
+        def _refresh_data(self):
+            sel = cmds.ls(sl=True, type="joint") or []
+            if not sel:
+                self._populate_table([], message=u"編集対象のジョイントを選択してください。")
+                return
+
+            base = sel[0]
+            twist_joints = _list_twist_joints(base)
+            if not twist_joints:
+                self._populate_table([], message=u"選択したジョイント直下にツイストジョイントが見つかりません。")
+                return
+
+            self._populate_table(twist_joints, message=u"ベースジョイント: {0}".format(base))
+
+        def _populate_table(self, joints, message=""):
+            self.table.setRowCount(0)
+            self.info_label.setText(message)
+            self.table.setEnabled(bool(joints))
+
+            for row, joint in enumerate(joints):
+                self.table.insertRow(row)
+
+                item = QtWidgets.QTableWidgetItem(joint)
+                item.setFlags(QtCore.Qt.ItemIsEnabled)
+                self.table.setItem(row, 0, item)
+
+                weight_spin = QtWidgets.QDoubleSpinBox()
+                weight_spin.setDecimals(3)
+                weight_spin.setRange(0.0, 10.0)
+                weight_spin.setSingleStep(0.01)
+                try:
+                    weight_value = cmds.getAttr(joint + ".twistWeight")
+                except Exception:
+                    weight_value = 0.0
+                weight_spin.setValue(weight_value)
+                self.table.setCellWidget(row, 1, weight_spin)
+
+                scale_spin = QtWidgets.QDoubleSpinBox()
+                scale_spin.setDecimals(3)
+                scale_spin.setRange(0.0, 20.0)
+                scale_spin.setSingleStep(0.01)
+                try:
+                    scale_value = cmds.getAttr(joint + ".twistScaleMax")
+                except Exception:
+                    scale_value = 1.0
+                scale_spin.setValue(scale_value)
+                self.table.setCellWidget(row, 2, scale_spin)
+
+        def _apply_changes(self):
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, 0)
+                if item is None:
+                    continue
+                joint = item.text()
+                if not cmds.objExists(joint):
+                    continue
+
+                weight_widget = self.table.cellWidget(row, 1)
+                scale_widget = self.table.cellWidget(row, 2)
+                if weight_widget is None or scale_widget is None:
+                    continue
+
+                weight_value = weight_widget.value()
+                scale_value = scale_widget.value()
+
+                try:
+                    cmds.setAttr(joint + ".twistWeight", weight_value)
+                except Exception:
+                    pass
+                try:
+                    cmds.setAttr(joint + ".twistScaleMax", scale_value)
+                except Exception:
+                    pass
+
+        def closeEvent(self, event):
+            super(TwistChainEditorDialog, self).closeEvent(event)
+            global _twist_chain_editor_dialog
+            _twist_chain_editor_dialog = None
+
+
+else:
+
+    class TwistChainEditorDialog(object):
+        pass
+
+
+_twist_chain_editor_dialog = None
+
+
+def show_twist_chain_editor():
+    if QtWidgets is None:
+        raise RuntimeError("PySide2 modules are not available.")
+    global _twist_chain_editor_dialog
+    if _twist_chain_editor_dialog is None:
+        _twist_chain_editor_dialog = TwistChainEditorDialog()
+    _twist_chain_editor_dialog.show()
+    _twist_chain_editor_dialog.raise_()
+    _twist_chain_editor_dialog.activateWindow()
+    return _twist_chain_editor_dialog
 
 
 if __name__ == "__main__":

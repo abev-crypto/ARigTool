@@ -71,6 +71,13 @@ class TwistChainDialog(QtWidgets.QDialog):
         self.spin_box.setRange(1, 100)
         self.spin_box.setValue(4)
 
+        self.scale_label = QtWidgets.QLabel(u"90°ツイスト時のYZスケール:")
+        self.scale_spin = QtWidgets.QDoubleSpinBox()
+        self.scale_spin.setDecimals(3)
+        self.scale_spin.setRange(0.0, 20.0)
+        self.scale_spin.setSingleStep(0.05)
+        self.scale_spin.setValue(1.2)
+
         self.create_button = QtWidgets.QPushButton(u"Create")
         self.close_button = QtWidgets.QPushButton(u"Close")
         self.create_button.setDefault(True)
@@ -81,9 +88,9 @@ class TwistChainDialog(QtWidgets.QDialog):
 
     def _create_layout(self):
         main_layout = QtWidgets.QVBoxLayout(self)
-        form_layout = QtWidgets.QHBoxLayout()
-        form_layout.addWidget(self.label)
-        form_layout.addWidget(self.spin_box)
+        form_layout = QtWidgets.QFormLayout()
+        form_layout.addRow(self.label, self.spin_box)
+        form_layout.addRow(self.scale_label, self.scale_spin)
         main_layout.addLayout(form_layout)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -94,9 +101,12 @@ class TwistChainDialog(QtWidgets.QDialog):
 
     def _on_create_clicked(self):
         count = self.spin_box.value()
+        scale = self.scale_spin.value()
 
         def _callback():
-            _call_module_function("CreateTwistChain", "create_twist_chain", count=count)
+            _call_module_function(
+                "CreateTwistChain", "create_twist_chain", count=count, scale_at_90=scale
+            )
 
         _run_with_warning(_callback)
 
@@ -119,6 +129,10 @@ def _create_twist_chain_with_count_dialog():
     return _twist_chain_dialog
 
 
+def _open_twist_chain_editor_dialog():
+    _call_module_function("CreateTwistChain", "show_twist_chain_editor")
+
+
 def _run_with_warning(callback):
     try:
         callback()
@@ -135,6 +149,11 @@ TOOL_CATEGORIES = [
                 "label": u"Create Twist Chain",
                 "tooltip": u"開始ジョイントと参照ジョイントを順に選択してツイスト用補助ジョイントを作成します。",
                 "callback": _create_twist_chain_with_count_dialog,
+            },
+            {
+                "label": u"Twist Chain Editor",
+                "tooltip": u"選択したジョイント直下のツイストジョイントに設定されたツイストウェイトとスケール最大値を一覧で編集します。",
+                "callback": partial(_run_with_warning, _open_twist_chain_editor_dialog),
             },
             {
                 "label": u"Create Half Rotation Joint",
