@@ -49,17 +49,69 @@ def _open_rig111_wire_controllers():
     mel.eval("rig111WireControllers();")
 
 
+class TwistChainDialog(QtWidgets.QDialog):
+    def __init__(self, parent=maya_main_window()):
+        super(TwistChainDialog, self).__init__(parent)
+        self.setObjectName("twistChainDialog")
+        self.setWindowTitle(u"Create Twist Chain")
+        self.setWindowFlags(self.windowFlags() ^ QtCore.Qt.WindowContextHelpButtonHint)
+        self.setWindowModality(QtCore.Qt.NonModal)
+
+        self._create_widgets()
+        self._create_layout()
+
+    def _create_widgets(self):
+        self.label = QtWidgets.QLabel(u"生成する補助ジョイントの数:")
+        self.spin_box = QtWidgets.QSpinBox()
+        self.spin_box.setRange(1, 100)
+        self.spin_box.setValue(4)
+
+        self.create_button = QtWidgets.QPushButton(u"Create")
+        self.close_button = QtWidgets.QPushButton(u"Close")
+        self.create_button.setDefault(True)
+        self.create_button.setAutoDefault(True)
+
+        self.create_button.clicked.connect(self._on_create_clicked)
+        self.close_button.clicked.connect(self.close)
+
+    def _create_layout(self):
+        main_layout = QtWidgets.QVBoxLayout(self)
+        form_layout = QtWidgets.QHBoxLayout()
+        form_layout.addWidget(self.label)
+        form_layout.addWidget(self.spin_box)
+        main_layout.addLayout(form_layout)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.create_button)
+        button_layout.addWidget(self.close_button)
+        main_layout.addLayout(button_layout)
+
+    def _on_create_clicked(self):
+        count = self.spin_box.value()
+
+        def _callback():
+            _call_module_function("CreateTwistChain", "create_twist_chain", count=count)
+
+        _run_with_warning(_callback)
+
+    def closeEvent(self, event):
+        super(TwistChainDialog, self).closeEvent(event)
+        global _twist_chain_dialog
+        _twist_chain_dialog = None
+
+
+_twist_chain_dialog = None
+
+
 def _create_twist_chain_with_count_dialog():
-    count, ok = QtWidgets.QInputDialog.getInt(
-        maya_main_window(),
-        u"Create Twist Chain",
-        u"生成する補助ジョイントの数:",
-        value=4,
-        min=1,
-    )
-    if not ok:
-        return
-    _call_module_function("CreateTwistChain", "create_twist_chain", count=count)
+    global _twist_chain_dialog
+    if _twist_chain_dialog is None:
+        _twist_chain_dialog = TwistChainDialog()
+    _twist_chain_dialog.show()
+    _twist_chain_dialog.raise_()
+    _twist_chain_dialog.activateWindow()
+    return _twist_chain_dialog
 
 
 def _run_with_warning(callback):
