@@ -25,6 +25,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
     MODE_TWIST = "twist"
     MODE_HALF = "half"
     MODE_SUPPORT = "support"
+    MODE_MANUAL = "manual"
 
     def __init__(self, parent=None):
         super(DrivenKeyToolDialog, self).__init__(parent or maya_main_window())
@@ -35,6 +36,8 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
 
         self._target_items: List[str] = []
         self._current_source: str = ""
+        self._manual_source: str = ""
+        self._manual_targets: List[str] = []
 
         self._create_widgets()
         self._create_layout()
@@ -52,6 +55,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self.mode_combo.addItem("Twist", self.MODE_TWIST)
         self.mode_combo.addItem("Half", self.MODE_HALF)
         self.mode_combo.addItem("Support", self.MODE_SUPPORT)
+        self.mode_combo.addItem("Manual", self.MODE_MANUAL)
 
         self.source_axis_combo = QtWidgets.QComboBox()
         self.source_axis_combo.addItems(["X", "Y", "Z"])
@@ -64,6 +68,25 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
 
         self.target_groups: Dict[str, Dict[str, QtWidgets.QCheckBox]] = {}
         self._create_target_checkboxes()
+
+        self.manual_group = QtWidgets.QGroupBox(u"Manual Selection")
+        manual_layout = QtWidgets.QGridLayout(self.manual_group)
+        self.manual_source_display = QtWidgets.QLineEdit()
+        self.manual_source_display.setReadOnly(True)
+        self.manual_source_display.setPlaceholderText(u"No source selected")
+        self.get_source_button = QtWidgets.QPushButton(u"Get Source")
+        manual_layout.addWidget(QtWidgets.QLabel(u"Source:"), 0, 0)
+        manual_layout.addWidget(self.manual_source_display, 0, 1)
+        manual_layout.addWidget(self.get_source_button, 0, 2)
+
+        self.manual_targets_display = QtWidgets.QLineEdit()
+        self.manual_targets_display.setReadOnly(True)
+        self.manual_targets_display.setPlaceholderText(u"No targets selected")
+        self.get_targets_button = QtWidgets.QPushButton(u"Get Targets")
+        manual_layout.addWidget(QtWidgets.QLabel(u"Targets:"), 1, 0)
+        manual_layout.addWidget(self.manual_targets_display, 1, 1)
+        manual_layout.addWidget(self.get_targets_button, 1, 2)
+        self.manual_group.setVisible(False)
 
         self.driver_value_spin = QtWidgets.QDoubleSpinBox()
         self.driver_value_spin.setDecimals(4)
@@ -151,6 +174,8 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         main_layout.addWidget(self.targets_list)
         main_layout.addWidget(self.refresh_button)
 
+        main_layout.addWidget(self.manual_group)
+
         main_layout.addWidget(self.trsc_group)
 
         value_layout = QtWidgets.QFormLayout()
@@ -169,15 +194,17 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         main_layout.addLayout(button_layout)
 
     def _create_connections(self):
-        self.mode_combo.currentIndexChanged.connect(self._update_targets)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self.source_axis_combo.currentIndexChanged.connect(self._refresh_value_fields)
         self.refresh_button.clicked.connect(self._update_targets)
         self.set_key_button.clicked.connect(self._set_driven_key)
         self.edit_curve_button.clicked.connect(self._edit_curves)
         self.close_button.clicked.connect(self.close)
+        self.get_source_button.clicked.connect(self._on_get_source_clicked)
+        self.get_targets_button.clicked.connect(self._on_get_targets_clicked)
 
     # region Target search helpers
-    def _get_source_joint(self) -> str:
+    def _selected_source_joint(self) -> str:
         sel = cmds.ls(sl=True, type="joint") or []
         if not sel:
             cmds.warning(u"ソースとなるジョイントを1つ選択してください。")
@@ -185,6 +212,15 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         if len(sel) > 1:
             cmds.warning(u"最初の選択ジョイントのみをソースとして使用します。")
         return sel[0]
+
+    def _active_source_joint(self) -> str:
+        mode = self.mode_combo.currentData()
+        if mode == self.MODE_MANUAL:
+            if not self._manual_source:
+                cmds.warning(u"マニュアルモードではソースを取得してください。")
+                return ""
+            return self._manual_source
+        return self._selected_source_joint()
 
     def _list_siblings(self, node: str) -> List[str]:
         parent = cmds.listRelatives(node, parent=True, fullPath=True) or []
@@ -220,7 +256,13 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         return list(dict.fromkeys(candidates))
 
     def _update_targets(self):
-        source = self._get_source_joint()
+        mode = self.mode_combo.currentData()
+        self.manual_group.setVisible(mode == self.MODE_MANUAL)
+        if mode == self.MODE_MANUAL:
+            self._apply_manual_selection()
+            return
+
+        source = self._selected_source_joint()
         if not source:
             self.targets_list.clear()
             self._target_items = []
@@ -240,6 +282,21 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self._populate_value_inputs(source, targets)
 
     # endregion
+
+    def _apply_manual_selection(self):
+        self.manual_group.setVisible(self.mode_combo.currentData() == self.MODE_MANUAL)
+        source = self._manual_source
+        targets = list(dict.fromkeys(self._manual_targets))
+        self.targets_list.clear()
+        for j in targets:
+            item = QtWidgets.QListWidgetItem(_short_name(j))
+            item.setData(QtCore.Qt.UserRole, j)
+            self.targets_list.addItem(item)
+            item.setSelected(True)
+        self._target_items = targets
+        self._current_source = source
+        self._populate_value_inputs(source, targets)
+        self._update_manual_display()
 
     def _selected_target_attributes(self) -> List[str]:
         attrs: List[str] = []
@@ -378,7 +435,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self._populate_value_inputs(self._current_source, self._target_items)
 
     def _set_driven_key(self):
-        source = self._get_source_joint()
+        source = self._active_source_joint()
         if not source:
             return
 
@@ -482,7 +539,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         cmds.inViewMessage(amg=u"<hl>Driven Key</hl> 設定完了", pos="topCenter", fade=True)
 
     def _edit_curves(self):
-        source = self._get_source_joint()
+        source = self._active_source_joint()
         if not source:
             return
         targets = self._selected_targets()
@@ -507,6 +564,117 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
 
         cmds.select(anim_curves, r=True)
         mel.eval("GraphEditor;")
+
+    def _on_mode_changed(self):
+        mode = self.mode_combo.currentData()
+        self.manual_group.setVisible(mode == self.MODE_MANUAL)
+        if mode != self.MODE_MANUAL:
+            self.targets_list.setEnabled(True)
+        self._update_targets()
+
+    def _on_get_source_clicked(self):
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        if modifiers & QtCore.Qt.AltModifier:
+            self._fetch_source_from_targets()
+        else:
+            self._set_manual_source_from_selection()
+
+    def _on_get_targets_clicked(self):
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        if modifiers & QtCore.Qt.AltModifier:
+            self._fetch_targets_from_source()
+        else:
+            self._set_manual_targets_from_selection()
+
+    def _set_manual_source_from_selection(self):
+        sel = cmds.ls(sl=True, type="joint") or []
+        if not sel:
+            cmds.warning(u"ジョイントを選択してください。")
+            return
+        source = cmds.ls(sel[0], l=True) or [sel[0]]
+        self._manual_source = source[0]
+        self._current_source = self._manual_source
+        self._update_manual_display()
+        self._apply_manual_selection()
+
+    def _set_manual_targets_from_selection(self):
+        sel = cmds.ls(sl=True, type="joint") or []
+        if not sel:
+            cmds.warning(u"ターゲットとなるジョイントを選択してください。")
+            return
+        long_names = [cmds.ls(j, l=True)[0] if cmds.ls(j, l=True) else j for j in sel]
+        self._manual_targets = list(dict.fromkeys(long_names))
+        self._apply_manual_selection()
+
+    def _fetch_targets_from_source(self):
+        if not self._manual_source:
+            cmds.warning(u"ソースが設定されていません。先にソースを取得してください。")
+            return
+        driver_attr = self._driver_attribute(self._manual_source)
+        if not cmds.objExists(driver_attr):
+            cmds.warning(u"ソースの回転属性が存在しません。")
+            return
+        curves = cmds.listConnections(driver_attr, type="animCurve", s=False, d=True) or []
+        targets: List[str] = []
+        for curve in curves:
+            outputs = cmds.listConnections(f"{curve}.output", plugs=True, s=False, d=True) or []
+            for plug in outputs:
+                if "." not in plug:
+                    continue
+                node, _ = plug.split(".", 1)
+                if cmds.nodeType(node) != "joint":
+                    continue
+                long_name = cmds.ls(node, l=True) or [node]
+                target = long_name[0]
+                if target not in targets:
+                    targets.append(target)
+        if not targets:
+            cmds.warning(u"接続されたターゲットが見つかりません。")
+            return
+        self._manual_targets = targets
+        self._apply_manual_selection()
+
+    def _fetch_source_from_targets(self):
+        sel = cmds.ls(sl=True, type="joint") or []
+        if not sel:
+            cmds.warning(u"ターゲットとなるジョイントを選択してください。")
+            return
+        for j in sel:
+            long_name = cmds.ls(j, l=True) or [j]
+            driver = self._find_driver_for_target(long_name[0])
+            if driver:
+                self._manual_source = driver
+                self._current_source = driver
+                self._update_manual_display()
+                self._apply_manual_selection()
+                return
+        cmds.warning(u"接続されたソースが見つかりませんでした。")
+
+    def _find_driver_for_target(self, target: str) -> str:
+        for attr in self._target_attr_list:
+            plug = f"{target}.{attr}"
+            if not cmds.objExists(plug):
+                continue
+            curves = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+            for curve in curves:
+                inputs = cmds.listConnections(curve, plugs=True, s=True, d=False) or []
+                for input_plug in inputs:
+                    if "." not in input_plug:
+                        continue
+                    node, _ = input_plug.split(".", 1)
+                    if cmds.nodeType(node) != "joint":
+                        continue
+                    long_name = cmds.ls(node, l=True) or [node]
+                    return long_name[0]
+        return ""
+
+    def _update_manual_display(self):
+        self.manual_source_display.setText(_short_name(self._manual_source) if self._manual_source else "")
+        if self._manual_targets:
+            names = ", ".join(_short_name(t) for t in self._manual_targets)
+        else:
+            names = ""
+        self.manual_targets_display.setText(names)
 
 
 def show_dialog():
