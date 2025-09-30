@@ -52,27 +52,11 @@ def _ensure_display_layer(name):
 
 
 def _list_twist_children(joint):
-    start_short = joint.split("|")[-1]
     result = []
     children = cmds.listRelatives(joint, c=True, type="joint") or []
     for child in children:
         if cmds.attributeQuery("twistWeight", node=child, exists=True):
             result.append(child)
-
-    parent = cmds.listRelatives(joint, p=True) or []
-    if parent:
-        siblings = cmds.listRelatives(parent[0], c=True, type="joint") or []
-        for sib in siblings:
-            if sib == joint:
-                continue
-            if sib in result:
-                continue
-            short = sib.split("|")[-1]
-            if not short.startswith(f"{start_short}_twist"):
-                continue
-            if cmds.attributeQuery("twistWeight", node=sib, exists=True):
-                result.append(sib)
-
     return result
 
 
