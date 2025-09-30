@@ -18,11 +18,49 @@ def _maya_main_window():
     return wrapInstance(int(ptr), QtWidgets.QWidget)
 
 
+def _is_half_joint(joint):
+    short_name = joint.split("|")[-1]
+    lowered = short_name.lower()
+    return (
+        lowered.endswith("_half")
+        or lowered.endswith("_half_inf")
+        or "halfjoint" in lowered
+    )
+
+
+def _list_base_children(joint):
+    children = cmds.listRelatives(joint, c=True, type="joint") or []
+    bases = []
+    for child in children:
+        if _is_half_joint(child):
+            continue
+        if cmds.attributeQuery("twistWeight", node=child, exists=True):
+            continue
+        bases.append(child)
+    return bases
+
+
 def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2):
-    sel = cmds.ls(sl=True, type="joint")
-    if len(sel) < 2:
-        cmds.error(u"開始ジョイント → 参照ジョイント の順に選択してください。")
-    start, ref = sel[0], sel[1]
+    sel = cmds.ls(sl=True, type="joint") or []
+    if not sel:
+        cmds.error(u"開始ジョイントを1つ選択してください。")
+
+    start = sel[0]
+
+    existing_twists = _list_twist_joints(start)
+    if existing_twists:
+        cmds.warning(u"{0} 直下には既にツイストジョイントが存在するため、処理をスキップします。".format(start))
+        return []
+
+    base_candidates = _list_base_children(start)
+    if not base_candidates:
+        cmds.warning(u"{0} 直下にツイストの基礎となるジョイントが見つからないため、処理をスキップします。".format(start))
+        return []
+    if len(base_candidates) > 1:
+        cmds.warning(u"{0} 直下に複数の基礎ジョイントが存在するため、ツイストチェーンの作成をスキップします。".format(start))
+        return []
+
+    ref = base_candidates[0]
 
     start_short = start.split("|")[-1]
     base_tag = name_tag or start_short
