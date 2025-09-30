@@ -142,6 +142,11 @@ TOOL_CATEGORIES = [
                 "callback": partial(_call_module_function, "CreateHalfRotJoint", "create_half_rotation_joint"),
             },
             {
+                "label": u"Create Support Joint",
+                "tooltip": u"選択したジョイントを親としてサポートジョイントを作成し、support_jntレイヤーに追加します。",
+                "callback": partial(_call_module_function, "CreateSupportJoint", "create_support_joint"),
+            },
+            {
                 "label": u"Driven Key Helper",
                 "tooltip": u"選択したジョイントをソースにTwist/Half用ジョイントへドリブンキーを設定します。",
                 "callback": partial(_run_with_warning, _open_driven_key_helper),

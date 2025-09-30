@@ -24,6 +24,7 @@ def _short_name(node: str) -> str:
 class DrivenKeyToolDialog(QtWidgets.QDialog):
     MODE_TWIST = "twist"
     MODE_HALF = "half"
+    MODE_SUPPORT = "support"
 
     def __init__(self, parent=None):
         super(DrivenKeyToolDialog, self).__init__(parent or maya_main_window())
@@ -50,12 +51,13 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self.mode_combo = QtWidgets.QComboBox()
         self.mode_combo.addItem("Twist", self.MODE_TWIST)
         self.mode_combo.addItem("Half", self.MODE_HALF)
+        self.mode_combo.addItem("Support", self.MODE_SUPPORT)
 
         self.source_axis_combo = QtWidgets.QComboBox()
         self.source_axis_combo.addItems(["X", "Y", "Z"])
 
         self.targets_list = QtWidgets.QListWidget()
-        self.targets_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.targets_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.targets_list.setFocusPolicy(QtCore.Qt.NoFocus)
 
         self.refresh_button = QtWidgets.QPushButton(u"Refresh Targets")
@@ -210,6 +212,11 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                 for j in descendants:
                     if "_Half_INF" in _short_name(j):
                         candidates.append(j)
+        elif mode == self.MODE_SUPPORT:
+            children = cmds.listRelatives(source, children=True, type="joint", fullPath=True) or []
+            for child in children:
+                if _short_name(child).endswith("_Sup"):
+                    candidates.append(child)
         return list(dict.fromkeys(candidates))
 
     def _update_targets(self):
@@ -224,7 +231,10 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         targets = self._collect_targets(source)
         self.targets_list.clear()
         for j in targets:
-            self.targets_list.addItem(_short_name(j))
+            item = QtWidgets.QListWidgetItem(_short_name(j))
+            item.setData(QtCore.Qt.UserRole, j)
+            self.targets_list.addItem(item)
+            item.setSelected(True)
         self._target_items = targets
         self._current_source = source
         self._populate_value_inputs(source, targets)
@@ -238,6 +248,12 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                 if checkbox.isChecked():
                     attrs.append(f"{prefix}{axis}")
         return attrs
+
+    def _selected_targets(self) -> List[str]:
+        items = self.targets_list.selectedItems()
+        if not items:
+            return []
+        return [data for data in (item.data(QtCore.Qt.UserRole) for item in items) if data]
 
     def _driver_attribute(self, source: str) -> str:
         axis = self.source_axis_combo.currentText()
@@ -368,9 +384,9 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
 
         self._current_source = source
 
-        targets = self._target_items
+        targets = self._selected_targets()
         if not targets:
-            cmds.warning(u"ターゲットが見つかりません。Refresh Targets を試してください。")
+            cmds.warning(u"ターゲットが選択されていません。リストから1つ以上選択してください。")
             return
 
         attrs = self._selected_target_attributes()
@@ -469,9 +485,9 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         source = self._get_source_joint()
         if not source:
             return
-        targets = self._target_items
+        targets = self._selected_targets()
         if not targets:
-            cmds.warning(u"ターゲットが見つかりません。Refresh Targets を試してください。")
+            cmds.warning(u"ターゲットが選択されていません。リストから1つ以上選択してください。")
             return
         attrs = self._selected_target_attributes()
         if not attrs:
