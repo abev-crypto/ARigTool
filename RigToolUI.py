@@ -166,6 +166,11 @@ TOOL_CATEGORIES = [
                 "callback": partial(_call_module_function, "CreateSupportJoint", "create_support_joint"),
             },
             {
+                "label": u"Mirror Twist & Half Joint",
+                "tooltip": u"選択したジョイントのTwistチェーンとHalfジョイントを名前規則に基づいて反対側に複製します。",
+                "callback": partial(_call_module_function, "MirrorTwistHalfJoint", "mirror_twist_and_half"),
+            },
+            {
                 "label": u"Driven Key Helper",
                 "tooltip": u"選択したジョイントをソースにTwist/Half用ジョイントへドリブンキーを設定します。",
                 "callback": partial(_run_with_warning, _open_driven_key_helper),
