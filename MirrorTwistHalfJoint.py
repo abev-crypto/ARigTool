@@ -60,27 +60,26 @@ def _list_twist_children(joint):
     return result
 
 
-def _find_twist_reference(twist_joint, start):
-    pma_nodes = cmds.listConnections(twist_joint + ".rotateX", s=True, d=False) or []
-    for node in pma_nodes:
-        if cmds.nodeType(node) != "plusMinusAverage":
+def _is_half_joint(joint):
+    short_name = joint.split("|")[-1]
+    lowered = short_name.lower()
+    return (
+        lowered.endswith("_half")
+        or lowered.endswith("_half_inf")
+        or "halfjoint" in lowered
+    )
+
+
+def _list_base_children(joint):
+    children = cmds.listRelatives(joint, c=True, type="joint") or []
+    bases = []
+    for child in children:
+        if _is_half_joint(child):
             continue
-        md_nodes = cmds.listConnections(node + ".input1D[1]", s=True, d=False) or []
-        for md in md_nodes:
-            if cmds.nodeType(md) != "multDoubleLinear":
-                continue
-            pma_sub_nodes = cmds.listConnections(md + ".input1", s=True, d=False) or []
-            for pma_sub in pma_sub_nodes:
-                if cmds.nodeType(pma_sub) != "plusMinusAverage":
-                    continue
-                inputs = cmds.listConnections(pma_sub + ".input1D[*]", s=True, d=False, p=True) or []
-                for plug in inputs:
-                    target = plug.split(".")[0]
-                    if target == start:
-                        continue
-                    if cmds.nodeType(target) == "joint":
-                        return target
-    return None
+        if cmds.attributeQuery("twistWeight", node=child, exists=True):
+            continue
+        bases.append(child)
+    return bases
 
 
 def _collect_twist_data(start):
@@ -93,7 +92,6 @@ def _collect_twist_data(start):
     except Exception:
         twist_joints.sort()
 
-    ref = _find_twist_reference(twist_joints[0], start)
     weights = []
     scales = []
     for j in twist_joints:
@@ -110,7 +108,6 @@ def _collect_twist_data(start):
             scales.append(1.0)
     return {
         "start": start,
-        "reference": ref,
         "weights": weights,
         "scales": scales,
         "count": len(twist_joints),
@@ -144,16 +141,6 @@ def _cleanup_twist(mirror_start):
 
 
 def _build_twist_chain(data, mirror_start):
-    ref = data.get("reference")
-    if not ref:
-        cmds.warning(u"{0} のTwist参照ジョイントが見つかりません。".format(data["start"]))
-        return
-
-    mirror_ref = _mirror_name(ref)
-    if not mirror_ref or not cmds.objExists(mirror_ref):
-        cmds.warning(u"{0} のミラー参照ジョイント {1} が存在しません。".format(ref, mirror_ref or "?"))
-        return
-
     if not cmds.objExists(mirror_start):
         cmds.warning(u"ミラー先ジョイント {0} が存在しません。".format(mirror_start))
         return
@@ -161,12 +148,20 @@ def _build_twist_chain(data, mirror_start):
     if data.get("count", 0) <= 0:
         return
 
+    base_candidates = _list_base_children(mirror_start)
+    if not base_candidates:
+        cmds.warning(u"{0} 直下にツイストの基礎となるジョイントが見つからないため、作成をスキップします。".format(mirror_start))
+        return
+    if len(base_candidates) > 1:
+        cmds.warning(u"{0} 直下に複数の基礎ジョイントが存在するため、ツイストチェーンのミラー作成をスキップします。".format(mirror_start))
+        return
+
     _cleanup_twist(mirror_start)
 
     prev_sel = cmds.ls(sl=True)
     scale_at_90 = data["scales"][-1] if data["scales"] else 1.0
     try:
-        cmds.select([mirror_start, mirror_ref], r=True)
+        cmds.select([mirror_start], r=True)
         created = create_twist_chain(count=data["count"], scale_at_90=scale_at_90)
     finally:
         if prev_sel:

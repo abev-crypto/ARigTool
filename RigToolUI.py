@@ -147,7 +147,7 @@ TOOL_CATEGORIES = [
         [
             {
                 "label": u"Create Twist Chain",
-                "tooltip": u"開始ジョイントと参照ジョイントを順に選択してツイスト用補助ジョイントを作成します。",
+                "tooltip": u"開始ジョイントを選択すると子から参照ジョイントを自動検出してツイスト用補助ジョイントを作成します。",
                 "callback": _create_twist_chain_with_count_dialog,
             },
             {
