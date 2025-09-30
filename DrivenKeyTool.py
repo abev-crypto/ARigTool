@@ -109,15 +109,14 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
             "Y": "#7aff7a",
             "Z": "#7aa7ff",
         }
+        group_box = QtWidgets.QGroupBox()
+        layout = QtWidgets.QHBoxLayout(group_box)
+        layout.setSpacing(6)
+        layout.setContentsMargins(6, 6, 6, 6)
         for prefix, axes in attrs.items():
-            group_box = QtWidgets.QGroupBox(prefix.title())
-            layout = QtWidgets.QHBoxLayout(group_box)
-            layout.setSpacing(6)
-            layout.setContentsMargins(6, 6, 6, 6)
             self.target_groups[prefix] = {}
             for axis in axes:
                 cb = QtWidgets.QCheckBox("")
-                cb.setToolTip(f"{prefix.title()} {axis}")
                 cb.setFixedSize(22, 22)
                 cb.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
                 color = color_map.get(axis, "#cccccc")
@@ -133,8 +132,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                 layout.addWidget(cb)
                 self.target_groups[prefix][axis] = cb
                 cb.stateChanged.connect(self._update_attribute_visibility)
-            layout.addStretch(1)
-            setattr(self, f"{prefix}_group", group_box)
+        setattr(self, f"trsc_group", group_box)
 
     def _create_layout(self):
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -151,9 +149,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         main_layout.addWidget(self.targets_list)
         main_layout.addWidget(self.refresh_button)
 
-        main_layout.addWidget(self.translate_group)
-        main_layout.addWidget(self.rotate_group)
-        main_layout.addWidget(self.scale_group)
+        main_layout.addWidget(self.trsc_group)
 
         value_layout = QtWidgets.QFormLayout()
         value_layout.addRow(QtWidgets.QLabel(u"Source Value:"), self.driver_value_spin)
