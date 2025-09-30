@@ -116,13 +116,13 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2):
         cmds.setAttr(j + "." + ratio_attr, ratio)
         cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
 
-        default_scale_max = (scale_at_90 - 1.0) * (count - i) + 1.0
+        scale_raito = (scale_at_90 - 1) * float(i) / float(count) + 1
         scale_attr = "twistScaleMax"
         if not cmds.attributeQuery(scale_attr, node=j, exists=True):
-            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=default_scale_max)
+            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=scale_raito)
             cmds.setAttr(j + "." + scale_attr, e=True, k=True)
         else:
-            cmds.setAttr(j + "." + scale_attr, default_scale_max)
+            cmds.setAttr(j + "." + scale_attr, scale_raito)
 
         delta_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{i:02d}_scaleDelta_ADL")
         cmds.connectAttr(j + "." + scale_attr, delta_add + ".input1", f=True)
