@@ -70,6 +70,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self.target_value_group = QtWidgets.QGroupBox(u"Default Target Values")
         self.target_value_layout = QtWidgets.QGridLayout(self.target_value_group)
         self.target_value_inputs: Dict[str, QtWidgets.QDoubleSpinBox] = {}
+        self.target_value_labels: Dict[str, QtWidgets.QLabel] = {}
         for row, attr in enumerate(self._target_attr_list):
             label = QtWidgets.QLabel(attr)
             spin = QtWidgets.QDoubleSpinBox()
@@ -78,6 +79,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
             self.target_value_layout.addWidget(label, row, 0)
             self.target_value_layout.addWidget(spin, row, 1)
             self.target_value_inputs[attr] = spin
+            self.target_value_labels[attr] = label
 
         self.individual_values_group = QtWidgets.QGroupBox(u"Individual Target Values")
         self.individual_values_group.setCheckable(True)
@@ -90,6 +92,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         self.individual_scroll_area.setWidget(self.individual_values_widget)
         self.individual_values_layout = QtWidgets.QVBoxLayout(self.individual_values_widget)
         self.individual_value_inputs: Dict[str, Dict[str, QtWidgets.QDoubleSpinBox]] = {}
+        self.individual_value_labels: Dict[str, Dict[str, QtWidgets.QLabel]] = {}
 
         self.set_key_button = QtWidgets.QPushButton(u"Set Driven Key")
         self.edit_curve_button = QtWidgets.QPushButton(u"Edit Curves")
@@ -101,16 +104,35 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
             "rotate": ("X", "Y", "Z"),
             "scale": ("X", "Y", "Z"),
         }
+        color_map = {
+            "X": "#ff7a7a",
+            "Y": "#7aff7a",
+            "Z": "#7aa7ff",
+        }
         for prefix, axes in attrs.items():
             group_box = QtWidgets.QGroupBox(prefix.title())
             layout = QtWidgets.QHBoxLayout(group_box)
+            layout.setSpacing(6)
+            layout.setContentsMargins(6, 6, 6, 6)
             self.target_groups[prefix] = {}
             for axis in axes:
-                cb = QtWidgets.QCheckBox(axis)
+                cb = QtWidgets.QCheckBox("")
+                cb.setToolTip(f"{prefix.title()} {axis}")
+                cb.setFixedSize(22, 22)
+                cb.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+                color = color_map.get(axis, "#cccccc")
+                cb.setStyleSheet(
+                    "QCheckBox{spacing:0px;}"
+                    "QCheckBox::indicator{width:16px;height:16px;border-radius:3px;"
+                    "background-color:%s;border:1px solid #333;}"
+                    "QCheckBox::indicator:checked{border:2px solid #111;}"
+                    % color
+                )
                 if prefix == "rotate" and axis == "X":
                     cb.setChecked(True)
                 layout.addWidget(cb)
                 self.target_groups[prefix][axis] = cb
+                cb.stateChanged.connect(self._update_attribute_visibility)
             layout.addStretch(1)
             setattr(self, f"{prefix}_group", group_box)
 
@@ -271,10 +293,12 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
 
         self._clear_layout(self.individual_values_layout)
         self.individual_value_inputs = {}
+        self.individual_value_labels = {}
         for target in targets:
             group_box = QtWidgets.QGroupBox(_short_name(target))
             grid = QtWidgets.QGridLayout(group_box)
             attr_widgets: Dict[str, QtWidgets.QDoubleSpinBox] = {}
+            attr_labels: Dict[str, QtWidgets.QLabel] = {}
             for row, attr in enumerate(self._target_attr_list):
                 plug = f"{target}.{attr}"
                 value = 0.0
@@ -294,12 +318,35 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                 grid.addWidget(label, row, 0)
                 grid.addWidget(spin, row, 1)
                 attr_widgets[attr] = spin
+                attr_labels[attr] = label
             self.individual_values_layout.addWidget(group_box)
             self.individual_value_inputs[target] = attr_widgets
+            self.individual_value_labels[target] = attr_labels
         self.individual_values_layout.addStretch(1)
         has_targets = bool(targets)
         self.target_value_group.setEnabled(has_targets)
         self.individual_values_group.setEnabled(has_targets)
+        self._apply_attribute_visibility()
+
+    def _apply_attribute_visibility(self):
+        selected_attrs = set(self._selected_target_attributes())
+        for attr, label in self.target_value_labels.items():
+            visible = attr in selected_attrs
+            label.setVisible(visible)
+            spin = self.target_value_inputs.get(attr)
+            if spin is not None:
+                spin.setVisible(visible)
+        for target, attr_inputs in self.individual_value_inputs.items():
+            labels = self.individual_value_labels.get(target, {})
+            for attr, spin in attr_inputs.items():
+                visible = attr in selected_attrs
+                spin.setVisible(visible)
+                label = labels.get(attr)
+                if label is not None:
+                    label.setVisible(visible)
+
+    def _update_attribute_visibility(self):
+        self._apply_attribute_visibility()
 
     def _target_value_for(self, target: str, attr: str) -> Optional[float]:
         if self.individual_values_group.isChecked():
