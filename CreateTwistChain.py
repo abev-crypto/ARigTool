@@ -8,13 +8,16 @@ def create_twist_chain(count=4, name_tag="Twist"):
         cmds.error(u"開始ジョイント → 参照ジョイント の順に選択してください。")
     start, ref = sel[0], sel[1]
 
+    start_short = start.split("|")[-1]
+    base_tag = name_tag or start_short
+
     p_start = cmds.xform(start, q=True, ws=True, t=True)
     p_ref = cmds.xform(ref, q=True, ws=True, t=True)
     length = ((p_ref[0] - p_start[0]) ** 2 + (p_ref[1] - p_start[1]) ** 2 + (p_ref[2] - p_start[2]) ** 2) ** 0.5
     if length < 1e-5:
         cmds.error(u"開始ジョイントと参照ジョイントの位置が同一です。")
 
-    pma_sub = cmds.createNode("plusMinusAverage", n=f"{name_tag}_twistDelta_PMA")
+    pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
     cmds.setAttr(pma_sub + ".operation", 2)  # subtract
     cmds.connectAttr(ref + ".rotateX", pma_sub + ".input1D[0]", f=True)
     cmds.connectAttr(start + ".rotateX", pma_sub + ".input1D[1]", f=True)
@@ -30,7 +33,7 @@ def create_twist_chain(count=4, name_tag="Twist"):
     for i in range(1, count + 1):
         ratio = float(i) / float(count + 1)
 
-        jnt_name = f"{name_tag}_twist{i:02d}_JNT"
+        jnt_name = f"{start_short}_twist{i:02d}"
         j = cmds.duplicate(start, po=True, n=jnt_name)[0]
 
         if cmds.attributeQuery("radius", node=j, exists=True):
@@ -60,11 +63,11 @@ def create_twist_chain(count=4, name_tag="Twist"):
             except Exception:
                 pass
 
-        md = cmds.createNode("multDoubleLinear", n=f"{name_tag}_twist{i:02d}_MD")
+        md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{i:02d}_MD")
         cmds.setAttr(md + ".input2", ratio)
         cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
 
-        pma_add = cmds.createNode("plusMinusAverage", n=f"{name_tag}_twist{i:02d}_PMA")
+        pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{i:02d}_PMA")
         cmds.setAttr(pma_add + ".operation", 1)
         cmds.connectAttr(start + ".rotateX", pma_add + ".input1D[0]", f=True)
         cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)

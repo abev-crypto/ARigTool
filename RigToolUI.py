@@ -49,6 +49,11 @@ def _open_rig111_wire_controllers():
     mel.eval("rig111WireControllers();")
 
 
+def _open_driven_key_helper():
+    module = _load_module("DrivenKeyTool")
+    module.show_dialog()
+
+
 class TwistChainDialog(QtWidgets.QDialog):
     def __init__(self, parent=maya_main_window()):
         super(TwistChainDialog, self).__init__(parent)
@@ -135,6 +140,11 @@ TOOL_CATEGORIES = [
                 "label": u"Create Half Rotation Joint",
                 "tooltip": u"選択したジョイントに半回転ジョイントとINFジョイントを生成し、回転を0.5倍に接続します。",
                 "callback": partial(_call_module_function, "CreateHalfRotJoint", "create_half_rotation_joint"),
+            },
+            {
+                "label": u"Driven Key Helper",
+                "tooltip": u"選択したジョイントをソースにTwist/Half用ジョイントへドリブンキーを設定します。",
+                "callback": partial(_run_with_warning, _open_driven_key_helper),
             },
             {
                 "label": u"Simple Rig From Ctrl + Joints",
