@@ -49,6 +49,19 @@ def _open_rig111_wire_controllers():
     mel.eval("rig111WireControllers();")
 
 
+def _create_twist_chain_with_count_dialog():
+    count, ok = QtWidgets.QInputDialog.getInt(
+        maya_main_window(),
+        u"Create Twist Chain",
+        u"生成する補助ジョイントの数:",
+        value=4,
+        min=1,
+    )
+    if not ok:
+        return
+    _call_module_function("CreateTwistChain", "create_twist_chain", count=count)
+
+
 def _run_with_warning(callback):
     try:
         callback()
@@ -64,7 +77,7 @@ TOOL_CATEGORIES = [
             {
                 "label": u"Create Twist Chain",
                 "tooltip": u"開始ジョイントと参照ジョイントを順に選択してツイスト用補助ジョイントを作成します。",
-                "callback": partial(_call_module_function, "CreateTwistChain", "create_twist_chain"),
+                "callback": _create_twist_chain_with_count_dialog,
             },
             {
                 "label": u"Create Half Rotation Joint",
