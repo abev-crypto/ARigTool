@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from PySide2 import QtCore, QtWidgets
 import maya.cmds as cmds
@@ -19,6 +19,14 @@ def maya_main_window():
 
 def _short_name(node: str) -> str:
     return node.split("|")[-1]
+
+
+ANIM_CURVE_TYPES: Sequence[str] = (
+    "animCurveUL",
+    "animCurveUA",
+    "animCurveUT",
+    "animCurveUU",
+)
 
 
 class DrivenKeyToolDialog(QtWidgets.QDialog):
@@ -551,12 +559,18 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
             cmds.warning(u"ターゲット属性を1つ以上選択してください。")
             return
 
-        anim_curves = []
+        anim_curves: List[str] = []
         for target in targets:
             for attr in attrs:
                 plug = f"{target}.{attr}"
-                conns = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
-                anim_curves.extend(conns)
+                for curve_type in ANIM_CURVE_TYPES:
+                    conns = (
+                        cmds.listConnections(plug, type=curve_type, s=True, d=False)
+                        or []
+                    )
+                    for curve in conns:
+                        if curve not in anim_curves:
+                            anim_curves.append(curve)
 
         if not anim_curves:
             cmds.warning(u"関連するアニメーションカーブが見つかりません。")
@@ -614,7 +628,15 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
         if not cmds.objExists(driver_attr):
             cmds.warning(u"ソースの回転属性が存在しません。")
             return
-        curves = cmds.listConnections(driver_attr, type="animCurve", s=False, d=True) or []
+        curves: List[str] = []
+        for curve_type in ANIM_CURVE_TYPES:
+            conns = (
+                cmds.listConnections(driver_attr, type=curve_type, s=False, d=True)
+                or []
+            )
+            for curve in conns:
+                if curve not in curves:
+                    curves.append(curve)
         targets: List[str] = []
         for curve in curves:
             outputs = cmds.listConnections(f"{curve}.output", plugs=True, s=False, d=True) or []
@@ -655,7 +677,14 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
             plug = f"{target}.{attr}"
             if not cmds.objExists(plug):
                 continue
-            curves = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+            curves: List[str] = []
+            for curve_type in ANIM_CURVE_TYPES:
+                conns = (
+                    cmds.listConnections(plug, type=curve_type, s=True, d=False) or []
+                )
+                for curve in conns:
+                    if curve not in curves:
+                        curves.append(curve)
             for curve in curves:
                 inputs = cmds.listConnections(curve, plugs=True, s=True, d=False) or []
                 for input_plug in inputs:
