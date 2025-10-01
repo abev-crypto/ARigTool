@@ -14,6 +14,12 @@ from CreateTwistChain import create_twist_chain
 TWIST_LAYER = "twist_jnt"
 HALF_LAYER = "halfrot_jnt"
 SUPPORT_LAYER = "support_jnt"
+ANIM_CURVE_TYPES = (
+    "animCurveUL",
+    "animCurveUA",
+    "animCurveUT",
+    "animCurveUU",
+)
 TWIST_NODE_TYPES = {
     "plusMinusAverage",
     "multDoubleLinear",
@@ -115,8 +121,18 @@ def _list_base_children(joint):
     return bases
 
 
+def _list_connected_anim_curves(target, **kwargs):
+    connections = cmds.listConnections(target, **kwargs) or []
+    result = []
+    for connection in connections:
+        node = connection.split(".")[0] if isinstance(connection, str) else connection
+        if cmds.nodeType(node) in ANIM_CURVE_TYPES:
+            result.append(connection)
+    return result
+
+
 def _list_driven_attributes(node):
-    anim_curves = cmds.listConnections(node, s=True, d=False, type="animCurve") or []
+    anim_curves = _list_connected_anim_curves(node, s=True, d=False) or []
     attrs = []
     for curve in anim_curves:
         outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True) or []
@@ -319,63 +335,90 @@ def _copy_driven_keys(src, dst, attrs):
         return
 
     for attr in attrs:
+        dst_attr = f"{dst}.{attr}"
+        src_attr = f"{src}.{attr}"
+        source_curves = _list_connected_anim_curves(src_attr, s=True, d=False)
+        if not source_curves:
+            continue
+
+        driver_plugs = []
+        for curve in source_curves:
+            inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
+            for plug in inputs:
+                if plug not in driver_plugs:
+                    driver_plugs.append(plug)
+
         try:
-            dst_attr = f"{dst}.{attr}"
-            src_attr = f"{src}.{attr}"
-            source_curves = cmds.listConnections(src_attr, s=True, d=False, type="animCurve") or []
-            driver_plugs = []
-            for curve in source_curves:
-                inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
-                for plug in inputs:
-                    if plug not in driver_plugs:
-                        driver_plugs.append(plug)
-            existing = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or [])
+            cmds.cutKey(dst, attribute=attr)
+        except RuntimeError as exc:
+            cmds.warning(u"{0}: cutKey 失敗 ({1})".format(dst_attr, exc))
+
+        duplicated_curves = []
+        for curve in source_curves:
             try:
-                cmds.cutKey(dst, attribute=attr)
-            except Exception:
-                pass
-            cmds.copyKey(src, attribute=attr)
-            cmds.pasteKey(dst, attribute=attr, option="replace")
-            if _should_negate_attr(attr):
+                duplicated = cmds.duplicate(curve, rc=True)[0]
+            except RuntimeError:
+                try:
+                    duplicated = cmds.duplicate(curve)[0]
+                except RuntimeError as exc:
+                    cmds.warning(u"{0} の複製に失敗しました: {1}".format(curve, exc))
+                    continue
+
+            duplicated_curves.append(duplicated)
+            try:
+                cmds.connectAttr(duplicated + ".output", dst_attr, f=True)
+            except RuntimeError as exc:
+                cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(duplicated, dst_attr, exc))
+                try:
+                    cmds.delete(duplicated)
+                except RuntimeError:
+                    pass
+                duplicated_curves.pop()
+                continue
+
+            existing_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True) or []
+            for plug in existing_inputs:
+                mirrored_attr = _mirror_attribute_plug(plug)
+                if not mirrored_attr or mirrored_attr == plug:
+                    continue
+                if not cmds.objExists(mirrored_attr.split(".")[0]):
+                    continue
+                if not cmds.objExists(mirrored_attr):
+                    continue
+                try:
+                    cmds.connectAttr(mirrored_attr, duplicated + ".input", f=True)
+                except RuntimeError as exc:
+                    cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(mirrored_attr, duplicated + ".input", exc))
+                    continue
+                try:
+                    cmds.disconnectAttr(plug, duplicated + ".input")
+                except RuntimeError:
+                    pass
+
+            final_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True) or []
+            if final_inputs:
+                continue
+
+            for driver_plug in driver_plugs:
+                mirrored_driver = _mirror_attribute_plug(driver_plug)
+                if not mirrored_driver:
+                    continue
+                if not cmds.objExists(mirrored_driver.split(".")[0]):
+                    continue
+                if not cmds.objExists(mirrored_driver):
+                    continue
+                try:
+                    cmds.connectAttr(mirrored_driver, duplicated + ".input", f=True)
+                    break
+                except RuntimeError as exc:
+                    cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(mirrored_driver, duplicated + ".input", exc))
+                    continue
+
+        if duplicated_curves and _should_negate_attr(attr):
+            try:
                 cmds.scaleKey(dst, attribute=attr, valueScale=-1)
-
-            new_curves = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or []) - existing
-            for curve in new_curves:
-                inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
-                for plug in inputs:
-                    mirrored_attr = _mirror_attribute_plug(plug)
-                    if not mirrored_attr or mirrored_attr == plug:
-                        continue
-                    if not cmds.objExists(mirrored_attr.split(".")[0]):
-                        continue
-                    if not cmds.objExists(mirrored_attr):
-                        continue
-                    try:
-                        cmds.connectAttr(mirrored_attr, curve + ".input", f=True)
-                    except Exception:
-                        continue
-                    try:
-                        cmds.disconnectAttr(plug, curve + ".input")
-                    except Exception:
-                        pass
-
-                final_inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
-                if not final_inputs and driver_plugs:
-                    for driver_plug in driver_plugs:
-                        mirrored_driver = _mirror_attribute_plug(driver_plug)
-                        if not mirrored_driver:
-                            continue
-                        if not cmds.objExists(mirrored_driver.split(".")[0]):
-                            continue
-                        if not cmds.objExists(mirrored_driver):
-                            continue
-                        try:
-                            cmds.connectAttr(mirrored_driver, curve + ".input", f=True)
-                        except Exception:
-                            continue
-                        break
-        except Exception:
-            pass
+            except RuntimeError as exc:
+                cmds.warning(u"{0}: scaleKey 失敗 ({1})".format(dst_attr, exc))
 
 
 def _build_half_chain(data, mirror_start):
