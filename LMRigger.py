@@ -6,6 +6,7 @@ from PySide2.QtWidgets import QFrame
 from PySide2.QtWidgets import QRadioButton
 from shiboken2 import wrapInstance
 from functools import partial
+import math
 
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
@@ -381,13 +382,9 @@ class LMriggerDialog(QtWidgets.QDialog):
         for joint in joints:
             children = cmds.listRelatives(joint, children=True)
             if(children == None):
-                parent_joint = cmds.listRelatives(joint, parent=True)[0]
-                tempConst = cmds.orientConstraint(parent_joint, joint, weight=-1)
-                cmds.delete(tempConst)
-                cmds.joint(joint, edit=True, zso=True)
-                cmds.makeIdentity(joint, apply=True, t=True, r=True, s=True)
+                self.orient_end_joint(joint)
             else:
-                cmds.joint(edit=True, 
+                cmds.joint(edit=True,
                         orientJoint= self.joint_orientation,
                         secondaryAxisOrient= self.world_up_orientation,
                         zso=True)
@@ -397,8 +394,11 @@ class LMriggerDialog(QtWidgets.QDialog):
                 children = cmds.listRelatives(joint, children=True)
 
                 if(children == None):
-                    parent = cmds.listRelatives(joint, parent=True)[0]
-                    self.aim_constriant(parent, joint, -pSign , sSign)
+                    dummy_child = self.create_end_joint_dummy(joint)
+                    if dummy_child:
+                        self.aim_constriant(dummy_child, joint, pSign , sSign)
+                        if cmds.objExists(dummy_child):
+                            cmds.delete(dummy_child)
                 else:
                     child = children[0]
                     cmds.parent(child, world=True)
@@ -406,6 +406,56 @@ class LMriggerDialog(QtWidgets.QDialog):
                     cmds.parent(child, joint)
                 cmds.select(clear=True)
                 cmds.select(joints)
+
+    def create_end_joint_dummy(self, joint):
+        parent_joint = cmds.listRelatives(joint, parent=True, type="joint")
+        if not parent_joint:
+            return None
+
+        parent_joint = parent_joint[0]
+        parent_pos = cmds.xform(parent_joint, query=True, worldSpace=True, translation=True)
+        joint_pos = cmds.xform(joint, query=True, worldSpace=True, translation=True)
+
+        direction = [joint_pos[i] - parent_pos[i] for i in range(3)]
+        length = math.sqrt(sum(axis ** 2 for axis in direction))
+
+        if length < 1e-4:
+            direction = [1.0, 0.0, 0.0]
+            length = 1.0
+        else:
+            direction = [axis / length for axis in direction]
+
+        dummy_position = [joint_pos[i] + direction[i] * length for i in range(3)]
+
+        dummy = cmds.createNode("joint")
+        dummy = cmds.parent(dummy, joint)[0]
+        short_name = joint.split("|")[-1]
+        dummy = cmds.rename(dummy, f"{short_name}_orientDummy#")
+        cmds.xform(dummy, worldSpace=True, translation=dummy_position)
+        cmds.setAttr(f"{dummy}.jointOrientX", 0)
+        cmds.setAttr(f"{dummy}.jointOrientY", 0)
+        cmds.setAttr(f"{dummy}.jointOrientZ", 0)
+
+        return dummy
+
+    def orient_end_joint(self, joint):
+        dummy_child = self.create_end_joint_dummy(joint)
+        if not dummy_child:
+            return
+
+        try:
+            temp_const = cmds.aimConstraint(dummy_child, joint,
+                                            offset=(0, 0, 0),
+                                            aimVector=(1, 0, 0),
+                                            upVector=(0, 1, 0),
+                                            worldUpVector=(1, 0, 0),
+                                            worldUpType="vector")
+            cmds.delete(temp_const)
+            cmds.joint(joint, edit=True, zso=True)
+            cmds.makeIdentity(joint, apply=True, t=True, r=True, s=True)
+        finally:
+            if cmds.objExists(dummy_child):
+                cmds.delete(dummy_child)
 
     def aim_constriant(self, child, joint, primary_sign, secondary_sign):
         aimVector, upVector, worldUpVector = self.get_aim_constraint_vectors(primary_sign,
