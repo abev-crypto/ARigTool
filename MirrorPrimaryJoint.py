@@ -25,6 +25,11 @@ def _uniquify(name):
             return candidate
         index += 1
 
+def _to_long(node):
+    result = cmds.ls(node, l=True)
+    if result:
+        return result[0]
+    return None
 
 def _normalize_angle(value):
     value = math.fmod(value, 360.0)
@@ -36,9 +41,9 @@ def _normalize_angle(value):
 
 
 def _ensure_suffix(joint):
-    joint_long = cmds.ls(joint, l=True)
+    joint_long = _to_long(joint)
     if not joint_long:
-        return joint
+        return None
     joint_long = joint_long[0]
     short = joint_long.split("|")[-1]
     if "_L" in short or "_R" in short:
@@ -54,7 +59,7 @@ def _ensure_suffix(joint):
     if cmds.objExists(new_short):
         new_short = _uniquify(new_short)
     renamed = cmds.rename(joint_long, new_short)
-    return cmds.ls(renamed, l=True)[0]
+    return _to_long(renamed) or renamed
 
 
 def _determine_target_parent(source_joint, mirror_map):
@@ -92,10 +97,9 @@ def _adjust_joint_orientation(joint):
 
 
 def _create_mirrored_joint(joint, mirror_map):
-    joint_long = cmds.ls(joint, l=True)
+    joint_long = _to_long(joint)
     if not joint_long:
         return None
-    joint_long = joint_long[0]
     short = joint_long.split("|")[-1]
     mirror_short = _mirror_name(short)
     if not mirror_short:
@@ -107,26 +111,48 @@ def _create_mirrored_joint(joint, mirror_map):
         mirror_map[joint_long] = existing[0]
         return None
 
-    duplicated = cmds.duplicate(joint_long, po=True)[0]
-    duplicated = cmds.rename(duplicated, mirror_short)
-    duplicated_long = cmds.ls(duplicated, l=True)[0]
+    duplicated_list = cmds.duplicate(joint_long)
+    if not duplicated_list:
+        cmds.warning(u"{0} の複製に失敗しました。".format(joint_long))
+        return None
+
+    duplicated = duplicated_list[0]
+    extras = duplicated_list[1:]
+    if extras:
+        cmds.delete(extras)
+    try:
+        duplicated = cmds.rename(duplicated, mirror_short)
+    except RuntimeError:
+        cmds.warning(u"{0} のリネームに失敗しました。".format(mirror_short))
+        cmds.delete(duplicated)
+        return None
+
+    duplicated_long = _to_long(duplicated)
+    if not duplicated_long:
+        cmds.warning(u"複製したジョイント {0} を取得できませんでした。".format(mirror_short))
+        cmds.delete(duplicated)
+        return None
 
     null_name = _uniquify(mirror_short + "_MirrorNull")
     null = cmds.group(em=True, name=null_name)
     cmds.xform(null, ws=True, t=(0.0, 0.0, 0.0), ro=(0.0, 0.0, 0.0))
 
-    cmds.parent(duplicated_long, null)
-    duplicated_long = cmds.ls(duplicated_long, l=True)[0]
+    parented = cmds.parent(duplicated_long, null) or []
+    if parented:
+        duplicated_long = _to_long(parented[0]) or duplicated_long
     cmds.setAttr(null + ".scaleX", -1.0)
     cmds.makeIdentity(null, apply=True, t=False, r=False, s=True, n=False, pn=True)
-    cmds.parent(duplicated_long, w=True)
-    duplicated_long = cmds.ls(duplicated_long, l=True)[0]
+    parented = cmds.parent(duplicated_long, w=True) or []
+    if parented:
+        duplicated_long = _to_long(parented[0]) or duplicated_long
     cmds.delete(null)
 
     target_parent = _determine_target_parent(joint_long, mirror_map)
     if target_parent:
-        cmds.parent(duplicated_long, target_parent)
-        duplicated_long = cmds.ls(duplicated_long, l=True)[0]
+        parented = cmds.parent(duplicated_long, target_parent) or []
+        if parented:
+            duplicated_long = _to_long(parented[0]) or duplicated_long
+
 
     _adjust_joint_orientation(duplicated_long)
     mirror_map[joint_long] = duplicated_long
@@ -134,11 +160,12 @@ def _create_mirrored_joint(joint, mirror_map):
 
 
 def _mirror_joint_recursive(joint, mirror_map, created):
-    joint_long = cmds.ls(joint, l=True)
+    joint_long = _to_long(joint)
     if not joint_long:
         return
-    joint_long = joint_long[0]
     joint_long = _ensure_suffix(joint_long)
+    if not joint_long:
+        return
 
     mirrored = _create_mirrored_joint(joint_long, mirror_map)
     if mirrored:
@@ -150,17 +177,25 @@ def _mirror_joint_recursive(joint, mirror_map, created):
 
 
 def mirror_primary_joints():
-    selected = cmds.ls(sl=True, type="joint", l=True) or []
+    selection = cmds.ls(sl=True, type="joint", l=True) or []
+    selected = []
+    if selection:
+        # sort by hierarchy depth so parents are processed before children
+        selection = sorted(selection, key=lambda node: node.count("|"))
+        selected_set = set()
+        for joint in selection:
+            parents = set(cmds.listRelatives(joint, p=True, f=True) or [])
+            if parents & selected_set:
+                continue
+            selected.append(joint)
+            selected_set.add(joint)
+    else:
+        selected = []
     if not selected:
         cmds.warning(u"ミラーするジョイントを選択してください。")
         return
 
-    selected_set = set(selected)
-    roots = []
-    for joint in selected:
-        parents = cmds.listRelatives(joint, p=True, f=True) or []
-        if not parents or parents[0] not in selected_set:
-            roots.append(joint)
+    roots = selected
 
     mirror_map = {}
     created = []
