@@ -50,6 +50,7 @@ class DrivenKeyEntry:
     key_index: int
     input_value: float
     output_value: float
+    driver_attribute: str = ""
 
 
 class DrivenKeyMatrixDialog(QtWidgets.QDialog):
@@ -78,6 +79,16 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         self.refresh_button = QtWidgets.QPushButton("Refresh From Selection")
         self.refresh_button.setToolTip("選択中のジョイントに設定されたドリブンキーを一覧表示します。")
 
+        self.auto_mirror_checkbox = QtWidgets.QCheckBox("Mirror to opposite joints automatically")
+        self.auto_mirror_checkbox.setToolTip(
+            "オンの場合、値を変更した際にミラー側のジョイントにも自動で反映します。"
+        )
+
+        self.mirror_button = QtWidgets.QPushButton("Apply Mirror Updates")
+        self.mirror_button.setToolTip(
+            "選択した行(未選択の場合は全て)の値をミラー側のジョイントに反映します。"
+        )
+
         self.table_widget = QtWidgets.QTableWidget(0, 3)
         self.table_widget.setAlternatingRowColors(True)
         self.table_widget.setHorizontalHeaderLabels(["Attr", "Input", "Output"])
@@ -102,7 +113,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         main_layout = QtWidgets.QVBoxLayout(self)
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(self.refresh_button)
+        button_layout.addWidget(self.auto_mirror_checkbox)
         button_layout.addStretch(1)
+        button_layout.addWidget(self.mirror_button)
         button_layout.addWidget(self.close_button)
 
         main_layout.addLayout(button_layout)
@@ -112,10 +125,133 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
     def _create_connections(self) -> None:
         self.refresh_button.clicked.connect(self.refresh_from_selection)
         self.close_button.clicked.connect(self.close)
+        self.mirror_button.clicked.connect(self.apply_mirror_from_selection)
         self.table_widget.itemChanged.connect(self._on_item_changed)
 
     # ------------------------------------------------------------------
     # Data helpers
+    def _mirror_joint_name(self, joint: str) -> Optional[str]:
+        mirrored = self._mirror_path(joint)
+        if mirrored:
+            return mirrored
+        short_mirror = self._mirror_simple_name(_short_name(joint))
+        if short_mirror and "|" in joint:
+            parts = joint.split("|")
+            if parts:
+                parts[-1] = short_mirror
+                candidate = "|".join(parts)
+                if candidate != joint:
+                    return candidate
+        return short_mirror
+
+    def _mirror_simple_name(self, name: str) -> Optional[str]:
+        if "_L" in name:
+            return name.replace("_L", "_R", 1)
+        if "_R" in name:
+            return name.replace("_R", "_L", 1)
+        return None
+
+    def _mirror_path(self, path: str) -> Optional[str]:
+        parts = [part for part in path.split("|") if part]
+        mirrored_parts: List[str] = []
+        changed = False
+        for part in parts:
+            mirrored = self._mirror_simple_name(part)
+            if mirrored:
+                mirrored_parts.append(mirrored)
+                changed = True
+            else:
+                mirrored_parts.append(part)
+        if not changed:
+            return None
+        prefix = "|" if path.startswith("|") else ""
+        return prefix + "|".join(mirrored_parts)
+
+    def _find_mirror_entry(self, entry: DrivenKeyEntry) -> Optional[DrivenKeyEntry]:
+        mirror_joint = self._mirror_joint_name(entry.joint)
+        if not mirror_joint:
+            return None
+
+        mirror_long = cmds.ls(mirror_joint, l=True) or [mirror_joint]
+        mirror_name = mirror_long[0]
+
+        for candidate in self._row_entries:
+            candidate_long = cmds.ls(candidate.joint, l=True) or [candidate.joint]
+            if candidate_long[0] != mirror_name:
+                continue
+            if candidate.attribute != entry.attribute:
+                continue
+            if abs(candidate.input_value - entry.input_value) > 1e-5:
+                continue
+            return candidate
+
+        if not cmds.objExists(mirror_name):
+            return None
+
+        mirror_entries = self._build_entries_for_joint(mirror_name)
+        for candidate in mirror_entries:
+            if candidate.attribute != entry.attribute:
+                continue
+            if abs(candidate.input_value - entry.input_value) > 1e-5:
+                continue
+            return candidate
+        return None
+
+    def _mirror_axis_multiplier(self, attribute: str) -> float:
+        """Return the multiplier to apply when mirroring a value for *attribute*."""
+
+        attr_lower = attribute.lower()
+        if attr_lower.endswith("y"):
+            return -1.0
+        return 1.0
+
+    def _mirror_value_for_column(
+        self, entry: DrivenKeyEntry, column: int, value: float
+    ) -> float:
+        """Adjust *value* when sending to the mirrored entry for the given column."""
+
+        if column == self.COLUMN_OUTPUT:
+            return value * self._mirror_axis_multiplier(entry.attribute)
+        if column == self.COLUMN_INPUT and entry.driver_attribute:
+            return value * self._mirror_axis_multiplier(entry.driver_attribute)
+        return value
+
+    def _update_mirror_entry(
+        self, entry: DrivenKeyEntry, values: Dict[int, float]
+    ) -> bool:
+        mirror_entry = self._find_mirror_entry(entry)
+        if not mirror_entry:
+            return False
+
+        try:
+            if self.COLUMN_INPUT in values:
+                mirrored_input = self._mirror_value_for_column(
+                    mirror_entry, self.COLUMN_INPUT, values[self.COLUMN_INPUT]
+                )
+                cmds.keyframe(
+                    mirror_entry.anim_curve,
+                    index=(mirror_entry.key_index, mirror_entry.key_index),
+                    edit=True,
+                    float=mirrored_input,
+                )
+                mirror_entry.input_value = mirrored_input
+            if self.COLUMN_OUTPUT in values:
+                mirrored_output = self._mirror_value_for_column(
+                    mirror_entry, self.COLUMN_OUTPUT, values[self.COLUMN_OUTPUT]
+                )
+                cmds.keyframe(
+                    mirror_entry.anim_curve,
+                    index=(mirror_entry.key_index, mirror_entry.key_index),
+                    edit=True,
+                    valueChange=mirrored_output,
+                )
+                mirror_entry.output_value = mirrored_output
+        except Exception as exc:  # pragma: no cover - Maya依存のため
+            self.info_label.setText(f"ミラー更新中にエラー: {exc}")
+            return False
+
+        return True
+
     def refresh_from_selection(self) -> None:
         self.table_widget.blockSignals(True)
         try:
@@ -197,6 +333,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 continue
 
             attribute = self._anim_curve_attribute(joint_name, anim_curve)
+            driver_attribute = self._anim_curve_driver_attribute(anim_curve)
             for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
                 entries.append(
                     DrivenKeyEntry(
@@ -206,6 +343,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                         key_index=index,
                         input_value=float(input_value),
                         output_value=float(output_value),
+                        driver_attribute=driver_attribute,
                     )
                 )
         return entries
@@ -236,6 +374,17 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         if fallback_attr:
             return fallback_attr
         return _short_name(anim_curve)
+
+    def _anim_curve_driver_attribute(self, anim_curve: str) -> str:
+        inputs = cmds.listConnections(
+            f"{anim_curve}.input", plugs=True, s=True, d=False
+        ) or []
+        for plug in inputs:
+            if "." not in plug:
+                continue
+            _, attr = plug.split(".", 1)
+            return attr
+        return ""
 
     def _attribute_from_curve_name(self, anim_curve: str) -> str:
         short_name = _short_name(anim_curve)
@@ -276,6 +425,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
         joint_label = _short_name(entry.joint)
         attribute_label = entry.attribute
+        message: Optional[str] = None
         try:
             if column == self.COLUMN_INPUT:
                 cmds.keyframe(
@@ -284,6 +434,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     edit=True,
                     float=value,
                 )
+                entry.input_value = value
             else:
                 cmds.keyframe(
                     entry.anim_curve,
@@ -291,13 +442,26 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     edit=True,
                     valueChange=value,
                 )
+                entry.output_value = value
+            if self.auto_mirror_checkbox.isChecked():
+                mirrored = self._update_mirror_entry(entry, {column: value})
+                if mirrored:
+                    message = (
+                        f"{joint_label}.{attribute_label} とミラー側のキーを更新しました。"
+                    )
+                else:
+                    message = (
+                        f"{joint_label}.{attribute_label} のキーを更新しました。(ミラーなし)"
+                    )
         except Exception as exc:  # pragma: no cover - Maya依存のため
             self.info_label.setText(f"キー更新中にエラー: {exc}")
             self._restore_item_value(row, column, entry)
             return
 
         self.refresh_from_selection()
-        self.info_label.setText(f"{joint_label}.{attribute_label} のキーを更新しました。")
+        if message is None:
+            message = f"{joint_label}.{attribute_label} のキーを更新しました。"
+        self.info_label.setText(message)
 
     def _restore_item_value(
         self, row: int, column: int, entry: DrivenKeyEntry
@@ -313,6 +477,35 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 item.setData(QtCore.Qt.EditRole, value)
         finally:
             self.table_widget.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    def apply_mirror_from_selection(self) -> None:
+        if not self._row_entries:
+            self.info_label.setText("ミラー更新対象がありません。")
+            return
+
+        rows = {index.row() for index in self.table_widget.selectionModel().selectedRows()}
+        if not rows:
+            rows = set(range(len(self._row_entries)))
+
+        updated = 0
+        for row in sorted(rows):
+            if not (0 <= row < len(self._row_entries)):
+                continue
+            entry = self._row_entries[row]
+            values = {
+                self.COLUMN_INPUT: entry.input_value,
+                self.COLUMN_OUTPUT: entry.output_value,
+            }
+            if self._update_mirror_entry(entry, values):
+                updated += 1
+
+        self.refresh_from_selection()
+
+        if updated:
+            self.info_label.setText(f"{updated} 件のミラーキーを更新しました。")
+        else:
+            self.info_label.setText("ミラー先のジョイントが見つかりませんでした。")
 
     # ------------------------------------------------------------------
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore
