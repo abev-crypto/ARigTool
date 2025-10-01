@@ -14,6 +14,12 @@ from CreateTwistChain import create_twist_chain
 TWIST_LAYER = "twist_jnt"
 HALF_LAYER = "halfrot_jnt"
 SUPPORT_LAYER = "support_jnt"
+ANIM_CURVE_TYPES = (
+    "animCurveUL",
+    "animCurveUA",
+    "animCurveUT",
+    "animCurveUU",
+)
 TWIST_NODE_TYPES = {
     "plusMinusAverage",
     "multDoubleLinear",
@@ -115,8 +121,18 @@ def _list_base_children(joint):
     return bases
 
 
+def _list_connected_anim_curves(target, **kwargs):
+    connections = cmds.listConnections(target, **kwargs) or []
+    result = []
+    for connection in connections:
+        node = connection.split(".")[0] if isinstance(connection, str) else connection
+        if cmds.nodeType(node) in ANIM_CURVE_TYPES:
+            result.append(connection)
+    return result
+
+
 def _list_driven_attributes(node):
-    anim_curves = cmds.listConnections(node, s=True, d=False, type="animCurve") or []
+    anim_curves = _list_connected_anim_curves(node, s=True, d=False) or []
     attrs = []
     for curve in anim_curves:
         outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True) or []
@@ -322,14 +338,14 @@ def _copy_driven_keys(src, dst, attrs):
         try:
             dst_attr = f"{dst}.{attr}"
             src_attr = f"{src}.{attr}"
-            source_curves = cmds.listConnections(src_attr, s=True, d=False, type="animCurve") or []
+            source_curves = _list_connected_anim_curves(src_attr, s=True, d=False)
             driver_plugs = []
             for curve in source_curves:
                 inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
                 for plug in inputs:
                     if plug not in driver_plugs:
                         driver_plugs.append(plug)
-            existing = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or [])
+            existing = set(_list_connected_anim_curves(dst_attr, s=True, d=False))
             try:
                 cmds.cutKey(dst, attribute=attr)
             except Exception:
@@ -339,7 +355,7 @@ def _copy_driven_keys(src, dst, attrs):
             if _should_negate_attr(attr):
                 cmds.scaleKey(dst, attribute=attr, valueScale=-1)
 
-            new_curves = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or []) - existing
+            new_curves = set(_list_connected_anim_curves(dst_attr, s=True, d=False)) - existing
             for curve in new_curves:
                 inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
                 for plug in inputs:
