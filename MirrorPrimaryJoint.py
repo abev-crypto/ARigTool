@@ -25,13 +25,11 @@ def _uniquify(name):
             return candidate
         index += 1
 
-
 def _to_long(node):
     result = cmds.ls(node, l=True)
     if result:
         return result[0]
     return None
-
 
 def _normalize_angle(value):
     value = math.fmod(value, 360.0)
@@ -46,6 +44,7 @@ def _ensure_suffix(joint):
     joint_long = _to_long(joint)
     if not joint_long:
         return None
+    joint_long = joint_long[0]
     short = joint_long.split("|")[-1]
     if "_L" in short or "_R" in short:
         return joint_long
@@ -153,6 +152,7 @@ def _create_mirrored_joint(joint, mirror_map):
         parented = cmds.parent(duplicated_long, target_parent) or []
         if parented:
             duplicated_long = _to_long(parented[0]) or duplicated_long
+
 
     _adjust_joint_orientation(duplicated_long)
     mirror_map[joint_long] = duplicated_long
