@@ -21,7 +21,28 @@ TWIST_NODE_TYPES = {
     "setRange",
     "condition",
 }
-MIRROR_NEGATE_ATTRS = {"translateX"}
+def _should_negate_attr(attr):
+    """Return True when mirrored driven keys should invert the value scale."""
+
+    if not attr:
+        return False
+    attr_name = attr.split(".")[-1]
+    return attr_name.endswith("Y")
+
+
+def _mirror_attribute_plug(plug):
+    if not plug or "." not in plug:
+        return None
+
+    node, attr = plug.rsplit(".", 1)
+    mirror_node = _mirror_name(node)
+    if not mirror_node and "|" in node:
+        mirrored_path = _mirror_path(node)
+        if mirrored_path != node:
+            mirror_node = mirrored_path
+    if not mirror_node:
+        return None
+    return f"{mirror_node}.{attr}"
 
 
 def _mirror_name(name):
@@ -300,6 +321,14 @@ def _copy_driven_keys(src, dst, attrs):
     for attr in attrs:
         try:
             dst_attr = f"{dst}.{attr}"
+            src_attr = f"{src}.{attr}"
+            source_curves = cmds.listConnections(src_attr, s=True, d=False, type="animCurve") or []
+            driver_plugs = []
+            for curve in source_curves:
+                inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
+                for plug in inputs:
+                    if plug not in driver_plugs:
+                        driver_plugs.append(plug)
             existing = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or [])
             try:
                 cmds.cutKey(dst, attribute=attr)
@@ -307,23 +336,15 @@ def _copy_driven_keys(src, dst, attrs):
                 pass
             cmds.copyKey(src, attribute=attr)
             cmds.pasteKey(dst, attribute=attr, option="replace")
-            if attr in MIRROR_NEGATE_ATTRS:
+            if _should_negate_attr(attr):
                 cmds.scaleKey(dst, attribute=attr, valueScale=-1)
 
             new_curves = set(cmds.listConnections(dst_attr, s=True, d=False, type="animCurve") or []) - existing
             for curve in new_curves:
                 inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
                 for plug in inputs:
-                    mirror_plug = None
-                    try:
-                        mirror_plug = _mirror_name(plug.split(".")[0])
-                    except Exception:
-                        mirror_plug = None
-                    if mirror_plug:
-                        mirrored_attr = mirror_plug + "." + plug.split(".", 1)[1]
-                    else:
-                        mirrored_attr = plug
-                    if mirrored_attr == plug:
+                    mirrored_attr = _mirror_attribute_plug(plug)
+                    if not mirrored_attr or mirrored_attr == plug:
                         continue
                     if not cmds.objExists(mirrored_attr.split(".")[0]):
                         continue
@@ -337,6 +358,22 @@ def _copy_driven_keys(src, dst, attrs):
                         cmds.disconnectAttr(plug, curve + ".input")
                     except Exception:
                         pass
+
+                final_inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
+                if not final_inputs and driver_plugs:
+                    for driver_plug in driver_plugs:
+                        mirrored_driver = _mirror_attribute_plug(driver_plug)
+                        if not mirrored_driver:
+                            continue
+                        if not cmds.objExists(mirrored_driver.split(".")[0]):
+                            continue
+                        if not cmds.objExists(mirrored_driver):
+                            continue
+                        try:
+                            cmds.connectAttr(mirrored_driver, curve + ".input", f=True)
+                        except Exception:
+                            continue
+                        break
         except Exception:
             pass
 
@@ -561,19 +598,23 @@ def mirror_twist_and_half():
     try:
         for joint in selection:
             mirror_joint = _mirror_name(joint)
-            if not mirror_joint or not cmds.objExists(mirror_joint):
+            mirror_exists = mirror_joint and cmds.objExists(mirror_joint)
+
+            if mirror_joint and not mirror_exists:
                 cmds.warning(u"{0} のミラー先ジョイントが見つかりません。".format(joint))
-                continue
 
-            twist_data = _collect_twist_data(joint)
-            if twist_data:
-                _build_twist_chain(twist_data, mirror_joint)
+            if mirror_exists:
+                twist_data = _collect_twist_data(joint)
+                if twist_data:
+                    _build_twist_chain(twist_data, mirror_joint)
 
-            half_data = _collect_half_data(joint)
-            if half_data:
-                _build_half_chain(half_data, mirror_joint)
+                half_data = _collect_half_data(joint)
+                if half_data:
+                    _build_half_chain(half_data, mirror_joint)
+            elif not mirror_joint:
+                cmds.warning(u"{0} には '_L' / '_R' の識別子がないため、Twist/Half のミラーをスキップします。".format(joint))
 
-            support_data = _collect_support_data(joint, mirror_joint)
+            support_data = _collect_support_data(joint, mirror_joint if mirror_exists else None)
             if support_data:
                 _cleanup_support(support_data)
                 _build_support_joints(support_data)
