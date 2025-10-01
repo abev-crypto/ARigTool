@@ -161,31 +161,26 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _build_entries_for_joint(self, joint: str) -> List[DrivenKeyEntry]:
         entries: List[DrivenKeyEntry] = []
-        attributes = cmds.listAttr(joint, keyable=True) or []
-        for attr in attributes:
-            if not attr.lower().startswith(("translate", "rotate", "scale")):
+        anim_curves = []
+        for t in ("animCurveUL", "animCurveUA", "animCurveUT", "animCurveUU"):
+            anim_curves += cmds.listConnections(joint, type=t, s=True, d=False) or []
+        for anim_curve in anim_curves:
+            inputs = cmds.keyframe(anim_curve, query=True, floatChange=True) or []
+            outputs = cmds.keyframe(anim_curve, query=True, valueChange=True) or []
+            if len(inputs) != len(outputs):
                 continue
-            plug = f"{joint}.{attr}"
-            anim_curves = cmds.listConnections(
-                plug, source=True, destination=False, type="animCurve"
-            ) or []
-            for anim_curve in anim_curves:
-                inputs = cmds.keyframe(anim_curve, query=True, floatChange=True) or []
-                outputs = cmds.keyframe(anim_curve, query=True, valueChange=True) or []
-                if len(inputs) != len(outputs):
-                    continue
 
-                for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
-                    entries.append(
-                        DrivenKeyEntry(
-                            joint=joint,
-                            attribute=attr,
-                            anim_curve=anim_curve,
-                            key_index=index,
-                            input_value=float(input_value),
-                            output_value=float(output_value),
-                        )
+            for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
+                entries.append(
+                    DrivenKeyEntry(
+                        joint=joint,
+                        attribute=anim_curve,
+                        anim_curve=anim_curve,
+                        key_index=index,
+                        input_value=float(input_value),
+                        output_value=float(output_value),
                     )
+                )
         return entries
 
     def _attribute_short_name(self, attribute: str) -> str:
