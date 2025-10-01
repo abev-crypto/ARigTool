@@ -163,14 +163,13 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         entries: List[DrivenKeyEntry] = []
         attributes = cmds.listAttr(joint, keyable=True) or []
         for attr in attributes:
+            if not attr.lower().startswith(("translate", "rotate", "scale")):
+                continue
             plug = f"{joint}.{attr}"
             anim_curves = cmds.listConnections(
                 plug, source=True, destination=False, type="animCurve"
             ) or []
             for anim_curve in anim_curves:
-                if not self._is_driven_key(anim_curve):
-                    continue
-
                 inputs = cmds.keyframe(anim_curve, query=True, floatChange=True) or []
                 outputs = cmds.keyframe(anim_curve, query=True, valueChange=True) or []
                 if len(inputs) != len(outputs):
@@ -188,18 +187,6 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                         )
                     )
         return entries
-
-    def _is_driven_key(self, anim_curve: str) -> bool:
-        sources = cmds.listConnections(
-            f"{anim_curve}.input", source=True, destination=False, plugs=True
-        ) or []
-        for plug in sources:
-            node = plug.split(".")[0]
-            if cmds.nodeType(node) == "time":
-                return False
-            if plug.endswith(".outTime"):
-                return False
-        return True
 
     def _attribute_short_name(self, attribute: str) -> str:
         attr_lower = attribute.lower()
