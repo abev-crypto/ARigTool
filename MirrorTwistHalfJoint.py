@@ -420,7 +420,6 @@ def _copy_driven_keys(src, dst, attrs):
             except RuntimeError as exc:
                 cmds.warning(u"{0}: scaleKey 失敗 ({1})".format(dst_attr, exc))
 
-
 def _build_half_chain(data, mirror_start):
     if not data:
         return
