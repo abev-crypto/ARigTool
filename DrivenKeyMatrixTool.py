@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from PySide2 import QtCore, QtGui, QtWidgets
 import maya.cmds as cmds
@@ -22,6 +22,24 @@ def maya_main_window() -> QtWidgets.QWidget:
 
 def _short_name(node: str) -> str:
     return node.split("|")[-1]
+
+
+ANIM_CURVE_TYPES: Sequence[str] = (
+    "animCurveUL",
+    "animCurveUA",
+    "animCurveUT",
+    "animCurveUU",
+)
+
+TARGET_ATTRIBUTES: Sequence[str] = tuple(
+    f"{prefix}{axis}"
+    for prefix in ("translate", "rotate", "scale")
+    for axis in ("X", "Y", "Z")
+)
+
+TARGET_ATTRIBUTE_MAP: Dict[str, str] = {
+    attr.lower(): attr for attr in TARGET_ATTRIBUTES
+}
 
 
 @dataclass
@@ -117,7 +135,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
                 start_row = self.table_widget.rowCount()
                 self._append_entries(entries)
-                self._set_joint_headers(start_row, len(entries), joint)
+                self._set_joint_headers(start_row, len(entries), entries[0].joint)
 
             if not self._row_entries:
                 self.info_label.setText("選択したジョイントにドリブンキーは見つかりませんでした。")
@@ -161,20 +179,29 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _build_entries_for_joint(self, joint: str) -> List[DrivenKeyEntry]:
         entries: List[DrivenKeyEntry] = []
-        anim_curves = []
-        for t in ("animCurveUL", "animCurveUA", "animCurveUT", "animCurveUU"):
-            anim_curves += cmds.listConnections(joint, type=t, s=True, d=False) or []
+        joint_long = cmds.ls(joint, l=True) or [joint]
+        joint_name = joint_long[0]
+        anim_curves: List[str] = []
+        for curve_type in ANIM_CURVE_TYPES:
+            anim_curves.extend(
+                cmds.listConnections(joint_name, type=curve_type, s=True, d=False) or []
+            )
+        seen_curves = set()
         for anim_curve in anim_curves:
+            if anim_curve in seen_curves:
+                continue
+            seen_curves.add(anim_curve)
             inputs = cmds.keyframe(anim_curve, query=True, floatChange=True) or []
             outputs = cmds.keyframe(anim_curve, query=True, valueChange=True) or []
             if len(inputs) != len(outputs):
                 continue
 
+            attribute = self._anim_curve_attribute(joint_name, anim_curve)
             for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
                 entries.append(
                     DrivenKeyEntry(
-                        joint=joint,
-                        attribute=anim_curve,
+                        joint=joint_name,
+                        attribute=attribute,
                         anim_curve=anim_curve,
                         key_index=index,
                         input_value=float(input_value),
@@ -182,6 +209,42 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     )
                 )
         return entries
+
+    def _anim_curve_attribute(self, joint: str, anim_curve: str) -> str:
+        outputs = cmds.listConnections(
+            f"{anim_curve}.output", plugs=True, s=False, d=True
+        ) or []
+        joint_long = cmds.ls(joint, l=True) or [joint]
+        joint_long_name = joint_long[0]
+        joint_short = _short_name(joint_long_name)
+        fallback_attr = ""
+        for plug in outputs:
+            if "." not in plug:
+                continue
+            node, attr = plug.split(".", 1)
+            node_long = cmds.ls(node, l=True) or [node]
+            node_long_name = node_long[0]
+            node_short = _short_name(node_long_name)
+            if node_long_name == joint_long_name or node_short == joint_short:
+                return attr
+            if not fallback_attr:
+                fallback_attr = attr
+
+        name_attr = self._attribute_from_curve_name(anim_curve)
+        if name_attr:
+            return name_attr
+        if fallback_attr:
+            return fallback_attr
+        return _short_name(anim_curve)
+
+    def _attribute_from_curve_name(self, anim_curve: str) -> str:
+        short_name = _short_name(anim_curve)
+        parts = short_name.split("_")
+        for part in reversed(parts):
+            key = part.lower()
+            if key in TARGET_ATTRIBUTE_MAP:
+                return TARGET_ATTRIBUTE_MAP[key]
+        return ""
 
     def _attribute_short_name(self, attribute: str) -> str:
         attr_lower = attribute.lower()
