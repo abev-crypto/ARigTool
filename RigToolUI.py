@@ -171,6 +171,11 @@ TOOL_CATEGORIES = [
                 "callback": partial(_call_module_function, "CreateSupportJoint", "create_support_joint"),
             },
             {
+                "label": u"Mirror Primary Joint",
+                "tooltip": u"選択したプライマリジョイント階層を左右反転した位置と命名規則で複製します。",
+                "callback": partial(_call_module_function, "MirrorPrimaryJoint", "mirror_primary_joints"),
+            },
+            {
                 "label": u"Mirror Twist & Half Joint",
                 "tooltip": u"選択したジョイントのTwistチェーンとHalfジョイントを名前規則に基づいて反対側に複製します。",
                 "callback": partial(_call_module_function, "MirrorTwistHalfJoint", "mirror_twist_and_half"),
