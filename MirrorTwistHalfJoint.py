@@ -137,8 +137,7 @@ def _list_driven_attributes(node):
     for curve in anim_curves:
         outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True) or []
         for plug in outputs:
-            if plug.startswith(node + "."):
-                attrs.append(plug.split(".", 1)[1])
+            attrs.append(plug.split(".", 1)[1])
     return sorted(set(attrs))
 
 
@@ -340,14 +339,12 @@ def _copy_driven_keys(src, dst, attrs):
         source_curves = _list_connected_anim_curves(src_attr, s=True, d=False)
         if not source_curves:
             continue
-
         driver_plugs = []
         for curve in source_curves:
-            inputs = cmds.listConnections(curve + ".input", s=True, d=False, p=True) or []
+            inputs = cmds.listConnections(curve, s=True, d=False, p=True, scn=True) or []
             for plug in inputs:
                 if plug not in driver_plugs:
                     driver_plugs.append(plug)
-
         try:
             cmds.cutKey(dst, attribute=attr)
         except RuntimeError as exc:
