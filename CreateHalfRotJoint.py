@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
 
+try:  # pragma: no cover - Maya環境外ではUI関連モジュールが利用できない場合がある
+    from PySide2 import QtCore, QtWidgets
+    from shiboken2 import wrapInstance
+    import maya.OpenMayaUI as omui
+except Exception:  # pragma: no cover - Maya環境外ではUI関連モジュールが利用できない場合がある
+    QtCore = QtWidgets = omui = wrapInstance = None
+
 LAYER_NAME = "halfrot_jnt"
+OPTIONVAR_SKIP_ROTATE_X = "ARigTool_SkipHalfRotateX"
+_half_rotation_dialog = None
 
 
 def _uniquify(base):
@@ -21,7 +30,29 @@ def _ensure_display_layer(name):
     return name
 
 
-def create_half_rotation_joint():
+def _maya_main_window():
+    if omui is None:
+        raise RuntimeError("Maya UI modules are not available.")
+    ptr = omui.MQtUtil.mainWindow()
+    if ptr is None:
+        raise RuntimeError("Mayaのメインウィンドウが取得できませんでした。")
+    return wrapInstance(int(ptr), QtWidgets.QWidget)
+
+
+def _get_skip_rotate_x_preference():
+    if cmds.optionVar(exists=OPTIONVAR_SKIP_ROTATE_X):
+        return bool(cmds.optionVar(q=OPTIONVAR_SKIP_ROTATE_X))
+    return False
+
+
+def _set_skip_rotate_x_preference(enabled):
+    cmds.optionVar(iv=(OPTIONVAR_SKIP_ROTATE_X, int(bool(enabled))))
+
+
+def create_half_rotation_joint(skip_rotate_x=None):
+    if skip_rotate_x is None:
+        skip_rotate_x = _get_skip_rotate_x_preference()
+
     sel = cmds.ls(sl=True, type="joint") or []
     if not sel:
         cmds.warning(u"ジョイントを1つ以上選択してください。")
@@ -50,7 +81,8 @@ def create_half_rotation_joint():
             md_name = _uniquify("md_%s_half" % base)
             md = cmds.createNode("multiplyDivide", n=md_name)
             cmds.setAttr(md + ".operation", 1)
-            cmds.setAttr(md + ".input2X", 0.5)
+            if not skip_rotate_x:
+                cmds.setAttr(md + ".input2X", 0.5)
             cmds.setAttr(md + ".input2Y", 0.5)
             cmds.setAttr(md + ".input2Z", 0.5)
 
@@ -63,10 +95,16 @@ def create_half_rotation_joint():
                     except Exception:
                         pass
 
-            cmds.connectAttr(j + ".rotateX", md + ".input1X", f=True)
+            if skip_rotate_x:
+                try:
+                    cmds.setAttr(half + ".rotateX", 0)
+                except Exception:
+                    pass
+            else:
+                cmds.connectAttr(j + ".rotateX", md + ".input1X", f=True)
+                cmds.connectAttr(md + ".outputX", half + ".rotateX", f=True)
             cmds.connectAttr(j + ".rotateY", md + ".input1Y", f=True)
             cmds.connectAttr(j + ".rotateZ", md + ".input1Z", f=True)
-            cmds.connectAttr(md + ".outputX", half + ".rotateX", f=True)
             cmds.connectAttr(md + ".outputY", half + ".rotateY", f=True)
             cmds.connectAttr(md + ".outputZ", half + ".rotateZ", f=True)
 
@@ -88,6 +126,68 @@ def create_half_rotation_joint():
             cmds.inViewMessage(amg=u"<hl>半回転ジョイント作成</hl><br>%s" % msg, pos="topCenter", fade=True, alpha=0.9)
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
+if QtWidgets is not None:  # pragma: no cover - Maya環境でのみ利用
+
+    class HalfRotationDialog(QtWidgets.QDialog):
+        def __init__(self, parent=None):
+            if parent is None:
+                parent = _maya_main_window()
+            super(HalfRotationDialog, self).__init__(parent)
+            self.setWindowTitle(u"Create Half Rotation Joint")
+            self.setObjectName("halfRotationDialog")
+            self.setWindowFlags(self.windowFlags() ^ QtCore.Qt.WindowContextHelpButtonHint)
+
+            self._create_widgets()
+            self._create_layout()
+
+        def _create_widgets(self):
+            self.skip_x_checkbox = QtWidgets.QCheckBox(u"X回転を接続しない")
+            self.skip_x_checkbox.setChecked(_get_skip_rotate_x_preference())
+
+            self.create_button = QtWidgets.QPushButton(u"Create")
+            self.close_button = QtWidgets.QPushButton(u"Close")
+            self.create_button.clicked.connect(self._on_create_clicked)
+            self.close_button.clicked.connect(self.close)
+
+        def _create_layout(self):
+            main_layout = QtWidgets.QVBoxLayout(self)
+            main_layout.addWidget(self.skip_x_checkbox)
+
+            button_layout = QtWidgets.QHBoxLayout()
+            button_layout.addStretch(1)
+            button_layout.addWidget(self.create_button)
+            button_layout.addWidget(self.close_button)
+            main_layout.addLayout(button_layout)
+
+        def _on_create_clicked(self):
+            enabled = self.skip_x_checkbox.isChecked()
+            _set_skip_rotate_x_preference(enabled)
+            create_half_rotation_joint(skip_rotate_x=enabled)
+
+        def closeEvent(self, event):
+            super(HalfRotationDialog, self).closeEvent(event)
+            global _half_rotation_dialog
+            _half_rotation_dialog = None
+
+
+    _half_rotation_dialog = None
+
+
+    def show_half_rotation_dialog():
+        global _half_rotation_dialog
+        if _half_rotation_dialog is None:
+            _half_rotation_dialog = HalfRotationDialog()
+        _half_rotation_dialog.show()
+        _half_rotation_dialog.raise_()
+        _half_rotation_dialog.activateWindow()
+        return _half_rotation_dialog
+
+else:
+
+    def show_half_rotation_dialog():  # pragma: no cover - Maya環境外
+        raise RuntimeError("PySide2 modules are not available.")
 
 
 if __name__ == "__main__":
