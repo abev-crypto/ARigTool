@@ -40,6 +40,8 @@ def create_support_joint():
 
     source_joint = selection[0]
     short = _short_name(source_joint)
+    if short.endswith("_D"):
+        short = short[:-2]
     new_name = _unique_name(f"{short}_Sup")
 
     cmds.undoInfo(openChunk=True)

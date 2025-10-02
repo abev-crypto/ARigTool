@@ -13,6 +13,12 @@ OPTIONVAR_SKIP_ROTATE_X = "ARigTool_SkipHalfRotateX"
 _half_rotation_dialog = None
 
 
+def _strip_duplicate_suffix(name):
+    if name.endswith("_D"):
+        return name[:-2]
+    return name
+
+
 def _uniquify(base):
     if not cmds.objExists(base):
         return base
@@ -64,7 +70,7 @@ def create_half_rotation_joint(skip_rotate_x=None):
     created = []
     try:
         for j in sel:
-            base = j.split("|")[-1]
+            base = _strip_duplicate_suffix(j.split("|")[-1])
 
             half_name = _uniquify(base + "_Half")
             half = cmds.duplicate(j, po=True, n=half_name)[0]
