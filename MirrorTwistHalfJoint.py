@@ -181,22 +181,12 @@ def _list_twist_children(joint):
 def _is_half_joint(joint):
     short_name = joint.split("|")[-1]
     lowered = short_name.lower()
-    return (
-        lowered.endswith("_half")
-        or lowered.endswith("_half_inf")
-        or "halfjoint" in lowered
-    )
-
+    return "_half" in lowered
 
 def _is_half_support_joint(joint):
     short_name = joint.split("|")[-1]
     lowered = short_name.lower()
-    if "_sup" not in lowered:
-        return False
-    if lowered.startswith("halfsup") or lowered.startswith("half_sup"):
-        return True
-    return "_half" in lowered
-
+    return "_sup" in lowered
 
 def _list_base_children(joint):
     children = cmds.listRelatives(joint, c=True, type="joint") or []
