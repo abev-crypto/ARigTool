@@ -32,6 +32,7 @@ ARig Tool は Autodesk Maya 上でのキャラクターリギング作業を効�
 - **Mirror Twist & Half Joint** — `_L` / `_R` の命名規則に従ってツイストチェーンや半回転ジョイント、サポートジョイントを反対側に複製し、必要に応じてドリブンキーも反転コピーします。【F:RigToolUI.py†L149-L202】【F:MirrorTwistHalfJoint.py†L1-L267】
 - **Driven Key Helper** — Twist / Half / Support ジョイントの駆動設定を想定した UI を提供し、ドライバー軸と対象属性を選んでドリブンキーを一括設定できます。【F:RigToolUI.py†L149-L202】【F:DrivenKeyTool.py†L32-L200】
 - **Driven Key Matrix** — 選択ジョイントに設定されたドリブンキーを行列形式で表示し、入力値・出力値をダブルクリックで編集できる管理ツールです。【F:RigToolUI.py†L149-L202】【F:DrivenKeyMatrixTool.py†L1-L200】
+- **Bind Skin (Skip Half)** — Half ジョイントを除外しつつ `_Half_INF` ジョイントは含めてジョイント階層を自動収集し、選択ジオメトリへスキンバインドします。【F:RigToolUI.py†L149-L202】【F:SkinBindTool.py†L1-L111】
 - **Simple Rig From Ctrl + Joints** — コントローラーとジョイントを選択すると、各ジョイントにゼログループ付きの複製コントローラーを配置し、親子関係とコンストレイントを自動構築します。【F:RigToolUI.py†L149-L202】【F:csimplerig.py†L16-L48】
 - **Create Eyelid Rig** — ベースコントローラーとまぶたジョイントを元に Aim / Parent Constraint を含むまぶたリグをセットアップし、複製コントローラーを選択状態にします。【F:RigToolUI.py†L149-L202】【F:ArigUtil.py†L83-L139】
 - **Create Stretchy Spline IK** — 開始ジョイントと終了ジョイントを指定してスプライン IK ハンドルとカーブを作成し、カーブ長に応じたストレッチとクラスタを自動付与します。【F:RigToolUI.py†L149-L202】【F:ArigUtil.py†L209-L253】
