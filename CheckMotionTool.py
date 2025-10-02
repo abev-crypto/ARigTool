@@ -25,21 +25,6 @@ def maya_main_window():
 
 EPSILON = 1.0e-4
 ROTATE_AXES: Sequence[str] = ("X", "Y", "Z")
-MIRROR_KEYWORDS: Sequence[str] = (
-    "Clavicle",
-    "Upperarm",
-    "Forearm",
-    "Hand",
-    "Thumb",
-    "Index",
-    "Middle",
-    "Ring",
-    "Pinky",
-    "Thigh",
-    "Calf",
-    "Foot",
-    "Toe",
-)
 DEFAULT_MATRIX_DATA = [
     {
         "joint": "Spine",
@@ -72,22 +57,7 @@ DEFAULT_MATRIX_DATA = [
         "max": {"X": 60, "Y": 45, "Z": 45},
     },
     {
-        "joint": ["Index", "Index1", "Index2"],
-        "min": {"X": -10, "Y": -5, "Z": -5},
-        "max": {"X": 90, "Y": 45, "Z": 45},
-    },
-    {
-        "joint": ["Middle", "Middle1", "Middle2"],
-        "min": {"X": -10, "Y": -5, "Z": -5},
-        "max": {"X": 90, "Y": 45, "Z": 45},
-    },
-    {
-        "joint": ["Ring", "Ring1", "Ring2"],
-        "min": {"X": -10, "Y": -5, "Z": -5},
-        "max": {"X": 90, "Y": 45, "Z": 45},
-    },
-    {
-        "joint": ["Pinky", "Pinky1", "Pinky2"],
+        "joint": ["Index", "Mid", "Ring", "Pinky"],
         "min": {"X": -10, "Y": -5, "Z": -5},
         "max": {"X": 90, "Y": 45, "Z": 45},
     },
@@ -118,13 +88,38 @@ DEFAULT_MATRIX_DATA = [
     },
 ]
 
+
+_JOINT_NAME_SPLIT_RE = re.compile(r"[\s,]+")
+
+
+def _split_joint_keywords(value: str) -> List[str]:
+    if not value:
+        return []
+    return [token for token in _JOINT_NAME_SPLIT_RE.split(value.strip()) if token]
+
+
+def _normalize_joint_names(value: object) -> List[str]:
+    if isinstance(value, str):
+        return _split_joint_keywords(value)
+    if isinstance(value, (list, tuple, set)):
+        names: List[str] = []
+        for item in value:
+            names.extend(_normalize_joint_names(item))
+        return names
+    if value is None:
+        return []
+    return _split_joint_keywords(str(value))
+
+
 def _is_non_zero(value: float) -> bool:
     return abs(value) > EPSILON
 
 def _should_attempt_mirror(joint: str) -> bool:
     short_name = joint.split("|")[-1]
-    lower = short_name.lower()
-    return any(keyword.lower() in lower for keyword in MIRROR_KEYWORDS)
+    upper = short_name.upper()
+    if "_L" not in upper and "_R" not in upper:
+        return False
+    return True
 
 
 def _chain_group_key_from_joint(joint: str) -> Optional[str]:
@@ -364,7 +359,7 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.batch_root_edit.setReadOnly(True)
         self.batch_root_button = QtWidgets.QPushButton(u"Get Selection")
         self.batch_table = QtWidgets.QTableWidget(0, 7)
-        self.batch_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.batch_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
         self.batch_table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.batch_table.setEditTriggers(QtWidgets.QAbstractItemView.AllEditTriggers)
         self.batch_table.setHorizontalHeaderLabels(
@@ -438,25 +433,38 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         root_layout.addWidget(self.batch_root_button)
         batch_layout.addLayout(root_layout)
 
-        table_tool_group = QtWidgets.QGroupBox(u"Table Tools")
-        table_tool_layout = QtWidgets.QHBoxLayout(table_tool_group)
-        table_tool_layout.addWidget(self.table_sign_button)
-        table_tool_layout.addWidget(self.table_copy_button)
-        table_tool_layout.addWidget(self.table_paste_button)
-        for button in self.table_value_buttons:
-            table_tool_layout.addWidget(button)
-        table_tool_layout.addStretch(1)
-        table_tool_layout.addWidget(self.reset_defaults_button)
-        table_tool_layout.addWidget(self.load_json_button)
-        table_tool_layout.addWidget(self.save_json_button)
-
-        batch_layout.addWidget(table_tool_group)
         batch_layout.addWidget(self.batch_table)
 
+        table_tools_widget = QtWidgets.QWidget()
+        table_tools_layout = QtWidgets.QGridLayout(table_tools_widget)
+        table_tools_layout.setContentsMargins(0, 0, 0, 0)
+        table_tools_layout.setHorizontalSpacing(4)
+        table_tools_layout.setVerticalSpacing(4)
+        table_tools_layout.addWidget(self.table_sign_button, 0, 0)
+        table_tools_layout.addWidget(self.table_copy_button, 0, 1)
+        table_tools_layout.addWidget(self.table_paste_button, 0, 2)
+        for index, button in enumerate(self.table_value_buttons):
+            row = 1 + index // 3
+            column = index % 3
+            table_tools_layout.addWidget(button, row, column)
+        table_tools_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Preferred)
+
+        table_utility_widget = QtWidgets.QWidget()
+        table_utility_layout = QtWidgets.QVBoxLayout(table_utility_widget)
+        table_utility_layout.setContentsMargins(0, 0, 0, 0)
+        table_utility_layout.setSpacing(4)
+        table_utility_layout.addWidget(self.reset_defaults_button)
+        table_utility_layout.addWidget(self.load_json_button)
+        table_utility_layout.addWidget(self.save_json_button)
+        table_utility_layout.addStretch(1)
+
         button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addWidget(table_tools_widget)
+        button_layout.addSpacing(12)
+        button_layout.addWidget(table_utility_widget)
+        button_layout.addStretch(1)
         button_layout.addWidget(self.add_row_button)
         button_layout.addWidget(self.remove_row_button)
-        button_layout.addStretch(1)
         batch_layout.addLayout(button_layout)
 
         settings_layout = QtWidgets.QFormLayout()
@@ -535,7 +543,7 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                 "Hand",
                 "Thumb",
                 "Index",
-                "Middle",
+                "Mid",
                 "Ring",
                 "Pinky",
                 "Thigh",
@@ -602,7 +610,10 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         selection_model = self.batch_table.selectionModel()
         if not selection_model:
             return []
-        return sorted({index.row() for index in selection_model.selectedRows()})
+        rows = {index.row() for index in selection_model.selectedRows()}
+        if not rows:
+            rows = {index.row() for index in selection_model.selectedIndexes()}
+        return sorted(rows)
 
     def _focused_row(self) -> Optional[int]:
         current_row = self.batch_table.currentRow()
@@ -627,12 +638,21 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         return []
 
     def _target_spinboxes(self) -> List[QtWidgets.QDoubleSpinBox]:
+        selection_model = self.batch_table.selectionModel()
+        if selection_model:
+            indexes = selection_model.selectedIndexes()
+            widgets: List[QtWidgets.QDoubleSpinBox] = []
+            for index in indexes:
+                if index.column() == 0:
+                    continue
+                widget = self.batch_table.cellWidget(index.row(), index.column())
+                if isinstance(widget, QtWidgets.QDoubleSpinBox):
+                    widgets.append(widget)
+            if widgets:
+                return widgets
         rows = self._target_rows()
         if rows:
-            spinboxes: List[QtWidgets.QDoubleSpinBox] = []
-            for row in rows:
-                spinboxes.extend(self._row_spinboxes(row))
-            return spinboxes
+            return self._row_spinboxes(rows[0])
         widget = QtWidgets.QApplication.focusWidget()
         if isinstance(widget, QtWidgets.QDoubleSpinBox):
             return [widget]
@@ -672,14 +692,20 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             if not isinstance(item, dict):
                 continue
 
-            names = item.get("joint") or item.get("joints") or item.get("names")
-            if isinstance(names, str):
-                name_list = [names]
-            elif isinstance(names, (list, tuple)):
-                name_list = [str(name).strip() for name in names if str(name).strip()]
-            else:
-                continue
+            names_value = item.get("joint") or item.get("joints") or item.get("names")
+            name_list = _normalize_joint_names(names_value)
             if not name_list:
+                continue
+
+            unique_names: List[str] = []
+            seen: Set[str] = set()
+            for raw_name in name_list:
+                stripped = str(raw_name).strip()
+                if not stripped or stripped in seen:
+                    continue
+                unique_names.append(stripped)
+                seen.add(stripped)
+            if not unique_names:
                 continue
 
             min_values = (
@@ -698,11 +724,11 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             rotate_min = {axis: float(min_values.get(axis, 0.0)) for axis in ROTATE_AXES}
             rotate_max = {axis: float(max_values.get(axis, 0.0)) for axis in ROTATE_AXES}
 
-            for name in name_list:
-                stripped = str(name).strip()
-                if not stripped:
-                    continue
-                entries.append((stripped, rotate_min, rotate_max))
+            if len(unique_names) == 1:
+                label = unique_names[0]
+            else:
+                label = " ".join(unique_names)
+            entries.append((label, rotate_min, rotate_max))
         return entries
 
     def _extract_row_payload(self, row: int) -> Optional[Dict[str, Dict[str, float]]]:
@@ -711,8 +737,9 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         item = self.batch_table.item(row, 0)
         if item is None:
             return None
-        joint = item.text().strip()
-        if not joint:
+        joint_text = item.text().strip()
+        names = _split_joint_keywords(joint_text)
+        if not names:
             return None
         rotate_min: Dict[str, float] = {}
         rotate_max: Dict[str, float] = {}
@@ -727,7 +754,8 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                 rotate_max[axis] = float(max_widget.value())
             else:
                 rotate_max[axis] = 0.0
-        return {"joint": joint, "min": rotate_min, "max": rotate_max}
+        joint_value: object = names if len(names) > 1 else names[0]
+        return {"joint": joint_value, "min": rotate_min, "max": rotate_max}
 
     def _on_add_row(self):
         self._add_row()
@@ -755,7 +783,12 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     rotate_min[axis] = min_widget.value()
                 if isinstance(max_widget, QtWidgets.QDoubleSpinBox):
                     rotate_max[axis] = max_widget.value()
-            configs.append((joint, rotate_min, rotate_max))
+
+            keywords = _split_joint_keywords(joint)
+            if not keywords:
+                continue
+            for keyword in keywords:
+                configs.append((keyword, dict(rotate_min), dict(rotate_max)))
         return configs
 
     def _gather_table_json(self) -> List[Dict[str, object]]:
@@ -776,8 +809,17 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             nonlocal current_names, current_min, current_max, current_value_key, current_base
             if not current_names:
                 return
+            unique_names: List[str] = []
+            seen: Set[str] = set()
+            for name in current_names:
+                if name in seen:
+                    continue
+                unique_names.append(name)
+                seen.add(name)
+            if not unique_names:
+                return
             entry: Dict[str, object] = {
-                "joint": current_names if len(current_names) > 1 else current_names[0],
+                "joint": unique_names if len(unique_names) > 1 else unique_names[0],
                 "min": current_min,
                 "max": current_max,
             }
@@ -794,20 +836,33 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                 flush_group()
                 continue
 
+            joint_field = payload["joint"]
+            if isinstance(joint_field, str):
+                joint_names = _split_joint_keywords(joint_field)
+            elif isinstance(joint_field, (list, tuple)):
+                joint_names = [str(name).strip() for name in joint_field if str(name).strip()]
+            else:
+                joint_names = _split_joint_keywords(str(joint_field))
+            if not joint_names:
+                flush_group()
+                continue
+
             value_key = tuple(payload["min"][axis] for axis in ROTATE_AXES) + tuple(
                 payload["max"][axis] for axis in ROTATE_AXES
             )
-            base_name = chain_base(payload["joint"])
+            base_name = chain_base(joint_names[0])
 
             if (
                 current_names
                 and current_value_key == value_key
                 and current_base == base_name
             ):
-                current_names.append(payload["joint"])
+                for name in joint_names:
+                    if name not in current_names:
+                        current_names.append(name)
             else:
                 flush_group()
-                current_names = [payload["joint"]]
+                current_names = list(joint_names)
                 current_min = dict(payload["min"])
                 current_max = dict(payload["max"])
                 current_value_key = value_key
