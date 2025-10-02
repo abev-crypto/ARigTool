@@ -51,12 +51,29 @@ def _mirror_attribute_plug(plug):
     return f"{mirror_node}.{attr}"
 
 
+def _strip_reverse_suffix(name):
+    if name.endswith("_D"):
+        return name[:-2]
+    return name
+
+
 def _mirror_name(name):
-    if "_L" in name:
-        return name.replace("_L", "_R", 1)
-    if "_R" in name:
-        return name.replace("_R", "_L", 1)
-    return None
+    base = _strip_reverse_suffix(name)
+    mirrored = None
+    if "_L" in base:
+        mirrored = base.replace("_L", "_R", 1)
+    elif "_R" in base:
+        mirrored = base.replace("_R", "_L", 1)
+
+    if not mirrored:
+        return None
+
+    if name.endswith("_D"):
+        candidate = mirrored + "_D"
+        if cmds.objExists(candidate):
+            return candidate
+
+    return mirrored
 
 
 def _uniquify(name):
@@ -90,9 +107,41 @@ def _mirror_path(path):
     return prefix + "|".join(mirrored)
 
 
+def _find_reverse_twist_root(start):
+    parent = cmds.listRelatives(start, p=True, f=True) or []
+    parent = parent[0] if parent else None
+
+    short_name = start.split("|")[-1]
+    base_short = _strip_reverse_suffix(short_name)
+    if not base_short:
+        return None
+
+    target_short = f"{base_short}_twistRoot"
+
+    if parent:
+        siblings = cmds.listRelatives(parent, c=True, type="joint", f=True) or []
+        for sibling in siblings:
+            if sibling.split("|")[-1] == target_short:
+                return sibling
+
+    candidates = cmds.ls(target_short, l=True) or []
+    return candidates[0] if candidates else None
+
+
 def _list_twist_children(joint):
     result = []
     children = cmds.listRelatives(joint, c=True, type="joint") or []
+    for child in children:
+        if cmds.attributeQuery("twistWeight", node=child, exists=True):
+            result.append(child)
+    if result:
+        return result
+
+    reverse_root = _find_reverse_twist_root(joint)
+    if not reverse_root:
+        return result
+
+    children = cmds.listRelatives(reverse_root, c=True, type="joint") or []
     for child in children:
         if cmds.attributeQuery("twistWeight", node=child, exists=True):
             result.append(child)
@@ -142,7 +191,11 @@ def _list_driven_attributes(node):
 
 
 def _collect_twist_data(start):
-    twist_joints = _list_twist_children(start)
+    reverse_root = _find_reverse_twist_root(start)
+    twist_parent = reverse_root if reverse_root else start
+
+    children = cmds.listRelatives(twist_parent, c=True, type="joint") or []
+    twist_joints = [child for child in children if cmds.attributeQuery("twistWeight", node=child, exists=True)]
     if not twist_joints:
         return None
 
@@ -154,9 +207,6 @@ def _collect_twist_data(start):
     weights = []
     scales = []
     driven = {}
-    reverse_values = []
-    reverse_attr = "reverseTwistWeight"
-    reverse_twist = False
     for j in twist_joints:
         try:
             weights.append(cmds.getAttr(j + ".twistWeight"))
@@ -169,36 +219,28 @@ def _collect_twist_data(start):
                 scales.append(1.0)
         else:
             scales.append(1.0)
-        if cmds.attributeQuery(reverse_attr, node=j, exists=True):
-            reverse_twist = True
-            try:
-                reverse_values.append(cmds.getAttr(j + "." + reverse_attr))
-            except Exception:
-                reverse_values.append(None)
-        else:
-            reverse_values.append(None)
         driven[j] = _list_driven_attributes(j)
 
     joint_count = len(twist_joints)
-    segment_count = joint_count - 1 if reverse_twist and joint_count > 0 else joint_count
 
     return {
         "start": start,
         "weights": weights,
         "scales": scales,
-        "count": segment_count,
+        "count": joint_count,
         "joint_count": joint_count,
         "joints": twist_joints,
         "driven": driven,
-        "reverse_twist": reverse_twist,
-        "reverse_attr": reverse_attr if reverse_twist else None,
-        "reverse_values": reverse_values if reverse_twist else None,
+        "reverse_twist": bool(reverse_root),
+        "reverse_root": reverse_root,
+        "reverse_root_driven": _list_driven_attributes(reverse_root) if reverse_root else [],
     }
 
 
 def _cleanup_twist(mirror_start):
     twist_joints = _list_twist_children(mirror_start)
-    if not twist_joints:
+    reverse_root = _find_reverse_twist_root(mirror_start)
+    if not twist_joints and not reverse_root:
         return
 
     nodes_to_delete = set()
@@ -219,7 +261,13 @@ def _cleanup_twist(mirror_start):
                             to_visit.append(up)
     if nodes_to_delete:
         cmds.delete(list(nodes_to_delete))
-    cmds.delete(twist_joints)
+
+    delete_targets = list(twist_joints)
+    if reverse_root and cmds.objExists(reverse_root):
+        delete_targets.append(reverse_root)
+
+    if delete_targets:
+        cmds.delete(delete_targets)
 
 
 def _build_twist_chain(data, mirror_start):
@@ -243,10 +291,12 @@ def _build_twist_chain(data, mirror_start):
 
     prev_sel = cmds.ls(sl=True)
     scale_at_90 = data["scales"][-1] if data["scales"] else 1.0
+    created_chain = []
     try:
         cmds.select([mirror_start], r=True)
-        created = create_twist_chain(
-            count=data.get("count", joint_count),
+        twist_count = data.get("count", joint_count)
+        created_chain = create_twist_chain(
+            count=twist_count,
             scale_at_90=scale_at_90,
             reverse_twist=data.get("reverse_twist", False),
         )
@@ -256,12 +306,20 @@ def _build_twist_chain(data, mirror_start):
         else:
             cmds.select(clear=True)
 
-    if not created:
+    if not created_chain:
         return
 
-    created = created[: joint_count]
+    root_joint = None
+    twist_targets = list(created_chain)
+    if data.get("reverse_twist"):
+        if twist_targets:
+            root_joint = twist_targets.pop(0)
+        else:
+            twist_targets = []
 
-    for idx, joint in enumerate(created):
+    twist_targets = twist_targets[:joint_count]
+
+    for idx, joint in enumerate(twist_targets):
         if idx >= len(data["weights"]):
             break
         weight = data["weights"][idx]
@@ -277,28 +335,33 @@ def _build_twist_chain(data, mirror_start):
                 cmds.setAttr(joint + ".twistScaleMax", scale_max)
             except Exception:
                 pass
-        if data.get("reverse_twist"):
-            reverse_values = data.get("reverse_values") or []
-            if idx < len(reverse_values):
-                reverse_value = reverse_values[idx]
-                if reverse_value is not None and data.get("reverse_attr"):
-                    attr_name = data["reverse_attr"]
-                    if cmds.attributeQuery(attr_name, node=joint, exists=True):
-                        try:
-                            cmds.setAttr(f"{joint}.{attr_name}", reverse_value)
-                        except Exception:
-                            pass
         if src_joint:
             attrs = data["driven"].get(src_joint, [])
             _copy_driven_keys(src_joint, joint, attrs)
 
+    if root_joint:
+        source_root = data.get("reverse_root")
+        root_attrs = data.get("reverse_root_driven") or []
+        if source_root and root_attrs:
+            _copy_driven_keys(source_root, root_joint, root_attrs)
+
     layer = _ensure_display_layer(TWIST_LAYER)
+    final_chain = []
+    if root_joint:
+        final_chain.append(root_joint)
+    final_chain.extend(twist_targets)
+    if not final_chain:
+        final_chain = created_chain
     try:
-        cmds.editDisplayLayerMembers(layer, created, nr=True)
+        cmds.editDisplayLayerMembers(layer, final_chain, nr=True)
     except Exception:
         pass
-    cmds.select(created, add=True)
-    cmds.inViewMessage(amg=u"<hl>Twist ミラー作成</hl><br>%s" % "\n".join(created), pos="topCenter", fade=True)
+    cmds.select(final_chain, add=True)
+    cmds.inViewMessage(
+        amg=u"<hl>Twist ミラー作成</hl><br>%s" % "\n".join(final_chain),
+        pos="topCenter",
+        fade=True,
+    )
 
 
 def _list_half_at_same_level(start):
