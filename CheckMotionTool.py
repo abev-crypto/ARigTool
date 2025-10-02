@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+import re
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from PySide2 import QtCore, QtWidgets
+from PySide2 import QtCore, QtGui, QtWidgets
 import maya.cmds as cmds
 
 
@@ -39,14 +40,64 @@ MIRROR_KEYWORDS: Sequence[str] = (
     "Toe",
 )
 
+CHAIN_KEYWORDS: Sequence[str] = (
+    "Thumb",
+    "Index",
+    "Middle",
+    "Ring",
+    "Pinky",
+    "Toe",
+)
+
+DEFAULT_MATRIX_TEXT = """
+# joint names (without _L/_R) followed by min/max values for rotate X/Y/Z.
+# Multiple joint names separated by spaces will share the same min/max values.
+Spine                -20 20   -15 15   -10 10
+Clavicle             -30 45   -20 90   -40 45
+Upperarm             -90 90   -80 100  -90 90
+Forearm              -5 5     0 135    -5 5
+Hand                 -45 45   -45 45   -30 30
+Thumb Thumb1 Thumb2  -15 60   -10 45   -10 45
+Index Index1 Index2  -10 90   -5 45    -5 45
+Middle Middle1 Middle2 -10 90 -5 45    -5 45
+Ring Ring1 Ring2     -10 90   -5 45    -5 45
+Pinky Pinky1 Pinky2  -10 90   -5 45    -5 45
+Thigh                -90 90   -45 45   -60 60
+Calf                 -5 5     0 140    -5 5
+Foot                 -45 45   -35 35   -45 45
+Toe                  -30 45   -20 20   -20 20
+Neck                 -35 35   -60 60   -35 35
+"""
+
+NUMBER_PATTERN = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+
 
 def _is_non_zero(value: float) -> bool:
     return abs(value) > EPSILON
+
+
+def _format_number(value: float) -> str:
+    text = f"{value:.3f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if text in {"", "-"}:
+        return "0"
+    return text
 
 def _should_attempt_mirror(joint: str) -> bool:
     short_name = joint.split("|")[-1]
     lower = short_name.lower()
     return any(keyword.lower() in lower for keyword in MIRROR_KEYWORDS)
+
+
+def _chain_group_key_from_joint(joint: str) -> Optional[str]:
+    short_name = joint.split("|")[-1]
+    base_name, side = _split_side(short_name)
+    lower = base_name.lower()
+    for keyword in CHAIN_KEYWORDS:
+        if keyword.lower() in lower:
+            return f"{keyword.lower()}_{side}"
+    return None
 
 def _cut_rotate_keys(joint: str):
     rotate_attrs = [f"rotate{axis}" for axis in ROTATE_AXES]
@@ -99,6 +150,15 @@ class CheckMotionResult:
     start_frame: float
     end_frame: float
     has_keys: bool
+
+
+@dataclass
+class _ResolvedConfig:
+    entry: str
+    joint: str
+    rotate_min: Dict[str, float]
+    rotate_max: Dict[str, float]
+    group_key: Optional[str]
 
 
 def apply_check_motion(
@@ -276,6 +336,25 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         for col in range(1, 7):
             self.batch_table.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
 
+        self.matrix_text_edit = QtWidgets.QPlainTextEdit()
+        self.matrix_text_edit.setPlaceholderText(
+            u"Joint MinX MaxX MinY MaxY MinZ MaxZ (multiple joint names can share values)"
+        )
+        self.matrix_text_edit.setPlainText(DEFAULT_MATRIX_TEXT.strip())
+
+        self.matrix_apply_button = QtWidgets.QPushButton(u"Apply Matrix To Table")
+        self.matrix_sign_button = QtWidgets.QPushButton(u"±")
+        self.matrix_copy_button = QtWidgets.QPushButton(u"Copy")
+        self.matrix_paste_button = QtWidgets.QPushButton(u"Paste")
+        self.matrix_value_buttons: List[QtWidgets.QPushButton] = []
+        for widget in (self.matrix_sign_button, self.matrix_copy_button, self.matrix_paste_button):
+            widget.setFocusPolicy(QtCore.Qt.NoFocus)
+        for value in (0, 10, 15, 30, 45, 60, 90):
+            button = QtWidgets.QPushButton(str(value))
+            button.setProperty("matrixValue", value)
+            button.setFocusPolicy(QtCore.Qt.NoFocus)
+            self.matrix_value_buttons.append(button)
+
         self.add_row_button = QtWidgets.QPushButton(u"Add Row")
         self.remove_row_button = QtWidgets.QPushButton(u"Remove Selected")
 
@@ -313,6 +392,21 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         root_layout.addWidget(self.batch_root_edit)
         root_layout.addWidget(self.batch_root_button)
         batch_layout.addLayout(root_layout)
+
+        matrix_group = QtWidgets.QGroupBox(u"Default Matrix")
+        matrix_layout = QtWidgets.QVBoxLayout(matrix_group)
+        matrix_layout.addWidget(self.matrix_text_edit)
+        matrix_button_layout = QtWidgets.QHBoxLayout()
+        matrix_button_layout.addWidget(self.matrix_sign_button)
+        matrix_button_layout.addWidget(self.matrix_copy_button)
+        matrix_button_layout.addWidget(self.matrix_paste_button)
+        for button in self.matrix_value_buttons:
+            matrix_button_layout.addWidget(button)
+        matrix_button_layout.addStretch(1)
+        matrix_layout.addLayout(matrix_button_layout)
+        matrix_layout.addWidget(self.matrix_apply_button)
+
+        batch_layout.addWidget(matrix_group)
         batch_layout.addWidget(self.batch_table)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -358,6 +452,12 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.add_row_button.clicked.connect(self._on_add_row)
         self.remove_row_button.clicked.connect(self._on_remove_selected_rows)
         self.apply_batch_button.clicked.connect(self._on_apply_batch_clicked)
+        self.matrix_apply_button.clicked.connect(self._on_apply_matrix_clicked)
+        self.matrix_sign_button.clicked.connect(self._on_matrix_sign_clicked)
+        self.matrix_copy_button.clicked.connect(self._on_matrix_copy_clicked)
+        self.matrix_paste_button.clicked.connect(self._on_matrix_paste_clicked)
+        for button in self.matrix_value_buttons:
+            button.clicked.connect(self._on_matrix_value_clicked)
         self.single_get_button.clicked.connect(self._on_get_single_joint)
         self.apply_single_button.clicked.connect(self._on_apply_single_clicked)
 
@@ -376,26 +476,33 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.batch_root_edit.setText(long_name)
 
     def _populate_default_rows(self):
-        default_joints = [
-            "Spine",
-            "Clavicle_L",
-            "Upperarm_L",
-            "Forearm_L",
-            "Hand_L",
-            "Thumb_L",
-            "Index_L",
-            "Middle_L",
-            "Ring_L",
-            "Pinky_L",
-            "Thigh_L",
-            "Calf_L",
-            "Foot_L",
-            "Toe_L",
-            "Neck",
-        ]
+        self.batch_table.setRowCount(0)
+        matrix_entries = self._parse_matrix_text(self.matrix_text_edit.toPlainText())
+        if not matrix_entries:
+            fallback_joints = [
+                "Spine",
+                "Clavicle",
+                "Upperarm",
+                "Forearm",
+                "Hand",
+                "Thumb",
+                "Index",
+                "Middle",
+                "Ring",
+                "Pinky",
+                "Thigh",
+                "Calf",
+                "Foot",
+                "Toe",
+                "Neck",
+            ]
+            for joint in fallback_joints:
+                self._add_row(joint)
+            return
 
-        for joint in default_joints:
+        for joint, rotate_min, rotate_max in matrix_entries:
             self._add_row(joint)
+            self._set_row_values(self.batch_table.rowCount() - 1, rotate_min, rotate_max)
 
     def _create_spin_cell(self) -> QtWidgets.QDoubleSpinBox:
         spin = QtWidgets.QDoubleSpinBox()
@@ -416,6 +523,39 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         for col in range(1, 7):
             spin = self._create_spin_cell()
             self.batch_table.setCellWidget(row, col, spin)
+
+    def _set_row_values(
+        self,
+        row: int,
+        rotate_min: Dict[str, float],
+        rotate_max: Dict[str, float],
+    ) -> None:
+        for axis_index, axis in enumerate(ROTATE_AXES):
+            min_widget = self.batch_table.cellWidget(row, 1 + axis_index * 2)
+            max_widget = self.batch_table.cellWidget(row, 2 + axis_index * 2)
+            if isinstance(min_widget, QtWidgets.QDoubleSpinBox):
+                min_widget.setValue(float(rotate_min.get(axis, 0.0)))
+            if isinstance(max_widget, QtWidgets.QDoubleSpinBox):
+                max_widget.setValue(float(rotate_max.get(axis, 0.0)))
+
+    @staticmethod
+    def _replace_numbers(text: str, transform: Callable[[float], float]) -> Optional[str]:
+        matches = list(NUMBER_PATTERN.finditer(text))
+        if not matches:
+            return None
+
+        parts: List[str] = []
+        last_index = 0
+        for match in matches:
+            try:
+                value = float(match.group())
+            except ValueError:
+                continue
+            parts.append(text[last_index : match.start()])
+            parts.append(_format_number(transform(value)))
+            last_index = match.end()
+        parts.append(text[last_index:])
+        return "".join(parts)
 
     def _on_add_row(self):
         self._add_row()
@@ -446,6 +586,126 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     rotate_max[axis] = max_widget.value()
             configs.append((joint, rotate_min, rotate_max))
         return configs
+
+    def _parse_matrix_text(
+        self, text: str
+    ) -> List[Tuple[str, Dict[str, float], Dict[str, float]]]:
+        entries: List[Tuple[str, Dict[str, float], Dict[str, float]]] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            tokens = stripped.split()
+            if len(tokens) < 7:
+                continue
+
+            number_tokens = tokens[-6:]
+            name_tokens = tokens[:-6]
+            if not name_tokens:
+                continue
+
+            try:
+                values = [float(token) for token in number_tokens]
+            except ValueError:
+                continue
+
+            rotate_min = {
+                "X": values[0],
+                "Y": values[2],
+                "Z": values[4],
+            }
+            rotate_max = {
+                "X": values[1],
+                "Y": values[3],
+                "Z": values[5],
+            }
+
+            for name in name_tokens:
+                entries.append((name, rotate_min, rotate_max))
+        return entries
+
+    def _focused_matrix_editor(self) -> Optional[QtWidgets.QPlainTextEdit]:
+        widget = QtWidgets.QApplication.focusWidget()
+        if widget is self.matrix_text_edit:
+            return self.matrix_text_edit
+        return None
+
+    def _operate_on_matrix_numbers(self, transform: Callable[[float], float]) -> None:
+        editor = self._focused_matrix_editor()
+        if editor is None:
+            return
+
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            cursor.select(QtGui.QTextCursor.WordUnderCursor)
+
+        selected_text = cursor.selectedText().replace("\u2029", "\n")
+        if not selected_text:
+            return
+
+        replaced = self._replace_numbers(selected_text, transform)
+        if replaced is None:
+            return
+
+        cursor.insertText(replaced.replace("\n", "\u2029"))
+        editor.setTextCursor(cursor)
+
+    def _on_apply_matrix_clicked(self):
+        self._populate_default_rows()
+
+    def _on_matrix_sign_clicked(self):
+        self._operate_on_matrix_numbers(lambda value: -value)
+
+    def _on_matrix_value_clicked(self):
+        sender = self.sender()
+        if not isinstance(sender, QtWidgets.QPushButton):
+            return
+
+        value = sender.property("matrixValue")
+        if value is None:
+            return
+
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            return
+
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        if modifiers & QtCore.Qt.AltModifier:
+            self._operate_on_matrix_numbers(lambda current, step=numeric_value: current - step)
+        elif modifiers & QtCore.Qt.ShiftModifier:
+            self._operate_on_matrix_numbers(lambda current, step=numeric_value: current + step)
+        else:
+            self._operate_on_matrix_numbers(lambda _current, target=numeric_value: target)
+
+    def _on_matrix_copy_clicked(self):
+        editor = self._focused_matrix_editor()
+        if editor is None:
+            return
+
+        cursor = editor.textCursor()
+        if not cursor.hasSelection():
+            return
+
+        text = cursor.selectedText().replace("\u2029", "\n")
+        if not text:
+            return
+
+        QtWidgets.QApplication.clipboard().setText(text)
+
+    def _on_matrix_paste_clicked(self):
+        editor = self._focused_matrix_editor()
+        if editor is None:
+            return
+
+        clipboard_text = QtWidgets.QApplication.clipboard().text()
+        if not clipboard_text:
+            return
+
+        cursor = editor.textCursor()
+        cursor.insertText(clipboard_text)
+        editor.setTextCursor(cursor)
 
     def _get_batch_search_root(self) -> Optional[str]:
         root_text = self.batch_root_edit.text().strip()
@@ -482,7 +742,16 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         if len(partial_matches) == 1:
             return partial_matches[0]
         if len(partial_matches) > 1:
-            partial_matches.sort(key=len)
+            def _match_priority(name: str) -> Tuple[int, int]:
+                short = name.split("|")[-1]
+                base_priority = len(name)
+                if short.endswith("_L"):
+                    return base_priority, 0
+                if short.endswith("_R"):
+                    return base_priority, 1
+                return base_priority, 2
+
+            partial_matches.sort(key=_match_priority)
             return partial_matches[0]
         return None
       
@@ -496,36 +765,124 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         interval = float(self.batch_interval_spin.value())
         search_root = self._get_batch_search_root()
 
+        resolved_configs: List[_ResolvedConfig] = []
         results: List[CheckMotionResult] = []
         errors: List[str] = []
-        processed: Set[str] = set()
+
+        for entry, rotate_min, rotate_max in configs:
+            joint = self._resolve_joint_entry(entry, search_root)
+            if not joint:
+                errors.append(u"ジョイント '{0}' が見つかりません。".format(entry))
+                continue
+
+            resolved_configs.append(
+                _ResolvedConfig(
+                    entry=entry,
+                    joint=joint,
+                    rotate_min={axis: float(rotate_min.get(axis, 0.0)) for axis in ROTATE_AXES},
+                    rotate_max={axis: float(rotate_max.get(axis, 0.0)) for axis in ROTATE_AXES},
+                    group_key=_chain_group_key_from_joint(joint),
+                )
+            )
+
+        if not resolved_configs:
+            if errors:
+                for error in errors:
+                    cmds.warning(error)
+            return
+
+        processed_joints: Set[str] = set()
+        processed_groups: Set[str] = set()
 
         cmds.undoInfo(openChunk=True, chunkName="CreateCheckMotionBatch")
         try:
             current_frame = start_frame
-            for entry, rotate_min, rotate_max in configs:
-                joint = self._resolve_joint_entry(entry, search_root)
-                if not joint:
-                    errors.append(u"ジョイント '{0}' が見つかりません。".format(entry))
+            index = 0
+            while index < len(resolved_configs):
+                config = resolved_configs[index]
+                if config.joint in processed_joints:
+                    index += 1
+                    continue
+                if config.group_key and config.group_key not in processed_groups:
+                    group_key = config.group_key
+                    group_members = [cfg for cfg in resolved_configs if cfg.group_key == group_key]
+                    group_start = current_frame
+                    group_end = group_start
+                    group_has_keys = False
+
+                    for member in group_members:
+                        if member.joint in processed_joints:
+                            continue
+
+                        try:
+                            result = apply_check_motion(
+                                member.joint,
+                                member.rotate_min,
+                                member.rotate_max,
+                                group_start,
+                                interval,
+                            )
+                        except ValueError as exc:
+                            errors.append(str(exc))
+                            continue
+
+                        results.append(result)
+                        processed_joints.add(member.joint)
+                        if result.has_keys:
+                            group_has_keys = True
+                            group_end = max(group_end, result.end_frame)
+
+                        mirror_joint = self._find_mirror_joint(member.joint, search_root)
+                        if mirror_joint and mirror_joint not in processed_joints:
+                            mirror_min = _mirror_axis_values(member.rotate_min)
+                            mirror_max = _mirror_axis_values(member.rotate_max)
+                            try:
+                                mirror_result = apply_check_motion(
+                                    mirror_joint,
+                                    mirror_min,
+                                    mirror_max,
+                                    group_start,
+                                    interval,
+                                )
+                            except ValueError as exc:
+                                errors.append(str(exc))
+                            else:
+                                results.append(mirror_result)
+                                processed_joints.add(mirror_joint)
+                                if mirror_result.has_keys:
+                                    group_has_keys = True
+                                    group_end = max(group_end, mirror_result.end_frame)
+
+                    processed_groups.add(group_key)
+                    if group_has_keys:
+                        current_frame = group_end + interval
+                    else:
+                        current_frame = group_start + interval
+                    index += 1
                     continue
 
-                if joint in processed:
-                    continue
                 joint_start = current_frame
                 try:
-                    result = apply_check_motion(joint, rotate_min, rotate_max, joint_start, interval)
+                    result = apply_check_motion(
+                        config.joint,
+                        config.rotate_min,
+                        config.rotate_max,
+                        joint_start,
+                        interval,
+                    )
                 except ValueError as exc:
                     errors.append(str(exc))
+                    index += 1
                     continue
 
                 results.append(result)
-                processed.add(joint)
+                processed_joints.add(config.joint)
                 next_start = result.end_frame + interval if result.has_keys else joint_start + interval
 
-                mirror_joint = self._find_mirror_joint(joint, search_root)
-                if mirror_joint and mirror_joint not in processed:
-                    mirror_min = _mirror_axis_values(rotate_min)
-                    mirror_max = _mirror_axis_values(rotate_max)
+                mirror_joint = self._find_mirror_joint(config.joint, search_root)
+                if mirror_joint and mirror_joint not in processed_joints:
+                    mirror_min = _mirror_axis_values(config.rotate_min)
+                    mirror_max = _mirror_axis_values(config.rotate_max)
                     try:
                         mirror_result = apply_check_motion(
                             mirror_joint, mirror_min, mirror_max, next_start, interval
@@ -535,14 +892,16 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                         current_frame = next_start
                     else:
                         results.append(mirror_result)
-                        processed.add(mirror_joint)
+                        processed_joints.add(mirror_joint)
                         if mirror_result.has_keys:
                             current_frame = mirror_result.end_frame + interval
                         else:
                             current_frame = next_start + interval
+                    index += 1
                     continue
 
                 current_frame = next_start
+                index += 1
         finally:
             cmds.undoInfo(closeChunk=True)
 
