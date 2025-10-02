@@ -46,6 +46,8 @@ def _collect_bind_joints(root):
         short = _short_name(joint)
         if "Half" in short and "Half_INF" not in short:
             continue
+        if "_D" in short:
+            continue
         joints.append(joint)
 
     # Remove duplicates while keeping order.
