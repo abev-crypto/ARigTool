@@ -119,8 +119,10 @@ def _find_reverse_twist_root(start):
     target_short = f"{base_short}_twistRoot"
 
     if parent:
-        siblings = cmds.listRelatives(parent, c=True, type="joint", f=True) or []
+        siblings = cmds.listRelatives(parent, c=True, f=True) or []
         for sibling in siblings:
+            if sibling == start:
+                continue
             if sibling.split("|")[-1] == target_short:
                 return sibling
 

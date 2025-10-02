@@ -65,7 +65,9 @@ def _open_check_motion_tool():
 
 
 class TwistChainDialog(QtWidgets.QDialog):
-    def __init__(self, parent=maya_main_window()):
+    def __init__(self, parent=None):
+        if parent is None:
+            parent = maya_main_window()
         super(TwistChainDialog, self).__init__(parent)
         self.setObjectName("twistChainDialog")
         self.setWindowTitle(u"Create Twist Chain")
