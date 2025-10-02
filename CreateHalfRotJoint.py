@@ -30,6 +30,27 @@ def _uniquify(base):
         i += 1
 
 
+def _has_half_joint(base_joint):
+    """Return True if a half joint already exists for *base_joint*."""
+
+    base_short = _strip_duplicate_suffix(base_joint.split("|")[-1])
+    parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
+    candidates = []
+    if parent:
+        candidates = cmds.listRelatives(parent[0], c=True, type="joint", pa=True) or []
+    else:
+        pattern = f"{base_short}_Half*"
+        candidates = cmds.ls(pattern, type="joint", l=True) or []
+
+    for candidate in candidates:
+        if candidate == base_joint:
+            continue
+        short = _strip_duplicate_suffix(candidate.split("|")[-1])
+        if short.startswith(base_short + "_Half"):
+            return True
+    return False
+
+
 def _ensure_display_layer(name):
     if not cmds.objExists(name) or cmds.nodeType(name) != "displayLayer":
         return cmds.createDisplayLayer(name=name, empty=True)
@@ -71,6 +92,10 @@ def create_half_rotation_joint(skip_rotate_x=None):
     try:
         for j in sel:
             base = _strip_duplicate_suffix(j.split("|")[-1])
+
+            if _has_half_joint(j):
+                cmds.warning(u"{0} には既にHalfジョイントが存在するため、作成をスキップします。".format(j))
+                continue
 
             half_name = _uniquify(base + "_Half")
             half = cmds.duplicate(j, po=True, n=half_name)[0]

@@ -316,7 +316,12 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
 
     existing_twists = _list_twist_joints(start)
     if existing_twists:
-        cmds.warning(u"{0} 直下には既にツイストジョイントが存在するため、処理をスキップします。".format(start))
+        reverse_root = _find_reverse_twist_root(start)
+        if reverse_root:
+            message = u"{0} には既に逆ツイストチェーンが存在するため、処理をスキップします。".format(start)
+        else:
+            message = u"{0} 直下には既にツイストジョイントが存在するため、処理をスキップします。".format(start)
+        cmds.warning(message)
         return []
 
     base_candidates = _list_base_children(start)
@@ -412,6 +417,19 @@ def _list_twist_joints(base_joint):
     children = cmds.listRelatives(base_joint, c=True, type="joint") or []
     twist_joints = []
     for child in children:
+        if cmds.attributeQuery("twistWeight", node=child, exists=True) and cmds.attributeQuery(
+            "twistScaleMax", node=child, exists=True
+        ):
+            twist_joints.append(child)
+    if twist_joints:
+        return twist_joints
+
+    reverse_root = _find_reverse_twist_root(base_joint)
+    if not reverse_root:
+        return twist_joints
+
+    reverse_children = cmds.listRelatives(reverse_root, c=True, type="joint") or []
+    for child in reverse_children:
         if cmds.attributeQuery("twistWeight", node=child, exists=True) and cmds.attributeQuery(
             "twistScaleMax", node=child, exists=True
         ):
