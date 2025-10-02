@@ -183,6 +183,31 @@ def _to_long_name(node: str) -> Optional[str]:
     if names:
         return names[0]
     return None
+
+
+def _collect_chain_targets(joint: str, group_key: Optional[str]) -> List[str]:
+    if not group_key:
+        return [joint]
+
+    descendants = _list_descendant_joints(joint)
+    if not descendants:
+        return [joint]
+
+    order_map = {name: index for index, name in enumerate(descendants)}
+    filtered: List[str] = [
+        node for node in descendants if _chain_group_key_from_joint(node) == group_key
+    ]
+
+    if joint not in filtered:
+        filtered.append(joint)
+
+    filtered.sort(key=lambda name: (len(name.split("|")), order_map.get(name, len(order_map))))
+
+    unique: List[str] = []
+    for node in filtered:
+        if node not in unique:
+            unique.append(node)
+    return unique
 @dataclass
 class CheckMotionResult:
     joint: str
@@ -257,6 +282,15 @@ def _split_side(name: str) -> Tuple[str, str]:
         return name[:-2], "L"
     if name.endswith("_R"):
         return name[:-2], "R"
+    upper = name.upper()
+    for side in ("L", "R"):
+        token = f"_{side}"
+        index = upper.rfind(token)
+        if index != -1:
+            prefix = name[:index]
+            suffix = name[index + 2 :]
+            base_name = prefix + suffix
+            return base_name, side
     return name, "C"
 
 
@@ -1110,52 +1144,67 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     group_end = group_start
                     group_has_keys = False
 
+                    unique_group_joints: List[str] = []
                     for member in group_members:
-                        if member.joint in processed_joints:
-                            continue
+                        if member.joint not in unique_group_joints:
+                            unique_group_joints.append(member.joint)
 
-                        try:
-                            result = apply_check_motion(
-                                member.joint,
-                                member.rotate_min,
-                                member.rotate_max,
-                                group_start,
-                                interval,
-                            )
-                        except ValueError as exc:
-                            errors.append(str(exc))
-                            continue
+                    propagate_chain = len(unique_group_joints) == 1
+                    member_targets: List[Tuple[_ResolvedConfig, List[str]]] = []
+                    if propagate_chain and group_members:
+                        member = group_members[0]
+                        targets = _collect_chain_targets(member.joint, member.group_key)
+                        member_targets.append((member, targets))
+                    else:
+                        for member in group_members:
+                            member_targets.append((member, [member.joint]))
 
-                        results.append(result)
-                        processed_joints.add(member.joint)
-                        if result.has_keys:
-                            group_has_keys = True
-                            group_end = max(group_end, result.end_frame)
+                    for member, targets in member_targets:
+                        for target_joint in targets:
+                            if target_joint in processed_joints:
+                                continue
 
-                        mirror_joint = (
-                            self._find_mirror_joint(member.joint, search_root)
-                            if mirror_enabled
-                            else None
-                        )
-                        if mirror_joint and mirror_joint not in processed_joints:
-                            mirror_min = _mirror_axis_values(member.rotate_min)
-                            mirror_max = _mirror_axis_values(member.rotate_max)
                             try:
-                                mirror_result = apply_check_motion(
-                                    mirror_joint,
-                                    mirror_min,
-                                    mirror_max,
+                                result = apply_check_motion(
+                                    target_joint,
+                                    member.rotate_min,
+                                    member.rotate_max,
                                     group_start,
                                     interval,
                                 )
                             except ValueError as exc:
                                 errors.append(str(exc))
-                            else:
-                                results.append(mirror_result)
-                                processed_joints.add(mirror_joint)
-                                if mirror_result.has_keys:
-                                    group_has_keys = True
-                                    group_end = max(group_end, mirror_result.end_frame)
+                                continue
+
+                            results.append(result)
+                            processed_joints.add(target_joint)
+                            if result.has_keys:
+                                group_has_keys = True
+                                group_end = max(group_end, result.end_frame)
+
+                            if not mirror_enabled:
+                                continue
+
+                            mirror_joint = self._find_mirror_joint(target_joint, search_root)
+                            if mirror_joint and mirror_joint not in processed_joints:
+                                mirror_min = _mirror_axis_values(member.rotate_min)
+                                mirror_max = _mirror_axis_values(member.rotate_max)
+                                try:
+                                    mirror_result = apply_check_motion(
+                                        mirror_joint,
+                                        mirror_min,
+                                        mirror_max,
+                                        group_start,
+                                        interval,
+                                    )
+                                except ValueError as exc:
+                                    errors.append(str(exc))
+                                else:
+                                    results.append(mirror_result)
+                                    processed_joints.add(mirror_joint)
+                                    if mirror_result.has_keys:
+                                        group_has_keys = True
+                                        group_end = max(group_end, mirror_result.end_frame)
 
                     processed_groups.add(group_key)
                     if group_has_keys:
@@ -1290,29 +1339,61 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         mirror_enabled = self.single_mirror_checkbox.isChecked()
 
         search_root = self._get_joint_root(joint)
+        group_key = _chain_group_key_from_joint(joint)
+        targets = _collect_chain_targets(joint, group_key)
+
+        results: List[CheckMotionResult] = []
+        processed_targets: Set[str] = set()
+        errors: List[str] = []
 
         cmds.undoInfo(openChunk=True, chunkName="CreateCheckMotionSingle")
         try:
-            result = apply_check_motion(joint, rotate_min, rotate_max, start_frame, interval)
+            for target_joint in targets:
+                if target_joint in processed_targets:
+                    continue
 
-            mirror_joint = (
-                self._find_mirror_joint(joint, search_root) if mirror_enabled else None
-            )
-            if mirror_joint:
+                try:
+                    result = apply_check_motion(
+                        target_joint, rotate_min, rotate_max, start_frame, interval
+                    )
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
+
+                results.append(result)
+                processed_targets.add(target_joint)
+
+            if mirror_enabled:
                 mirror_min = _mirror_axis_values(rotate_min)
                 mirror_max = _mirror_axis_values(rotate_max)
-                mirror_start = result.end_frame + interval if result.has_keys else start_frame + interval
-                apply_check_motion(
-                    mirror_joint,
-                    mirror_min,
-                    mirror_max,
-                    mirror_start,
-                    interval,
-                )
-        except ValueError as exc:
-            cmds.warning(str(exc))
+
+                if any(result.has_keys for result in results):
+                    max_end = max(result.end_frame for result in results if result.has_keys)
+                    mirror_start = max_end + interval
+                else:
+                    mirror_start = start_frame + interval
+
+                for target_joint in targets:
+                    mirror_joint = self._find_mirror_joint(target_joint, search_root)
+                    if not mirror_joint or mirror_joint in processed_targets:
+                        continue
+
+                    try:
+                        mirror_result = apply_check_motion(
+                            mirror_joint, mirror_min, mirror_max, mirror_start, interval
+                        )
+                    except ValueError as exc:
+                        errors.append(str(exc))
+                        continue
+
+                    processed_targets.add(mirror_joint)
+                    results.append(mirror_result)
         finally:
             cmds.undoInfo(closeChunk=True)
+
+        if errors:
+            for message in errors:
+                cmds.warning(message)
 
     @staticmethod
     def _find_mirror_joint(joint: str, search_root: Optional[str] = None) -> Optional[str]:
@@ -1329,7 +1410,14 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             return None
 
         mirror_side = "R" if side == "L" else "L"
-        expected_short = f"{base_name}_{mirror_side}"
+        side_token = "_L" if side == "L" else "_R"
+        index = short_name.upper().rfind(side_token)
+        if index != -1:
+            prefix = short_name[:index]
+            suffix = short_name[index + 2 :]
+            expected_short = f"{prefix}_{mirror_side}{suffix}"
+        else:
+            expected_short = f"{base_name}_{mirror_side}"
 
         if search_root and cmds.objExists(search_root):
             search_space = _list_descendant_joints(search_root)
