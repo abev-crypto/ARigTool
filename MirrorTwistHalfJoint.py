@@ -133,6 +133,28 @@ def _find_reverse_twist_root(start):
         return None
 
     target_short = f"{base_short}_twistRoot"
+    parent = cmds.listRelatives(start, p=True, pa=True) or []
+    if parent:
+        siblings = cmds.listRelatives(parent[0], c=True, type="joint", pa=True) or []
+    else:
+        siblings = cmds.ls("|*", type="joint", long=True) or []
+
+    start_long = cmds.ls(start, long=True) or [start]
+    start_long = start_long[0]
+
+    for sibling in siblings:
+        if not sibling or sibling == start_long:
+            continue
+        short = sibling.split("|")[-1]
+        if short == target_short:
+            return sibling
+
+    for sibling in siblings:
+        if not sibling or sibling == start_long:
+            continue
+        if "twistroot" in sibling.split("|")[-1].lower():
+            return sibling
+
     return _find_joint_by_short_name(start, target_short)
 
 
@@ -183,6 +205,12 @@ def _list_base_children(joint):
         if _is_half_joint(child):
             continue
         if _is_half_support_joint(child):
+            continue
+        short_name = child.split("|")[-1]
+        lowered = short_name.lower()
+        if "twistroot" in lowered:
+            continue
+        if "twist" in lowered:
             continue
         if cmds.attributeQuery("twistWeight", node=child, exists=True):
             continue
