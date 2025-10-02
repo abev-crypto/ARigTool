@@ -220,6 +220,24 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
     except Exception:
         pass
 
+    if reverse_twist:
+        start_short_name = start.split("|")[-1]
+        if not start_short_name.endswith("_D"):
+            new_short_name = start_short_name + "_D"
+            if cmds.objExists(new_short_name):
+                cmds.warning(
+                    u"{0} に '_D' を付加した名前 {1} は既に存在するため、リネームをスキップします。".format(
+                        start_short_name, new_short_name
+                    )
+                )
+            else:
+                try:
+                    start = cmds.rename(start, new_short_name)
+                except RuntimeError as exc:
+                    cmds.warning(
+                        u"{0} のリネームに失敗しました: {1}".format(start_short_name, exc)
+                    )
+
     cmds.select(created, r=True)
     print(u"[Twist] 作成:", created)
     return created
