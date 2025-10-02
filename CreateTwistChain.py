@@ -419,6 +419,35 @@ def _list_twist_joints(base_joint):
     return twist_joints
 
 
+def _find_joint_by_short_name(base_joint, short_name):
+    """Find a joint that shares the same parent/namespace as *base_joint* and has *short_name*.
+
+    Maya may return either full DAG paths or short names, so we try siblings first and then fall
+    back to a global search.
+    """
+
+    parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
+    search_roots = []
+    if parent:
+        siblings = cmds.listRelatives(parent[0], c=True, type="joint", pa=True) or []
+        search_roots.extend(siblings)
+    matches = cmds.ls(short_name, type="joint", long=True) or []
+    search_roots.extend(matches)
+
+    for candidate in search_roots:
+        if candidate.split("|")[-1] == short_name:
+            return candidate
+    return None
+
+
+def _find_reverse_twist_root(base_joint):
+    base_short = base_joint.split("|")[-1]
+    if base_short.endswith("_D"):
+        base_short = base_short[:-2]
+    candidate_short = base_short + "_twistRoot"
+    return _find_joint_by_short_name(base_joint, candidate_short)
+
+
 if QtWidgets is not None:
 
     class TwistChainEditorDialog(QtWidgets.QDialog):
@@ -482,11 +511,20 @@ if QtWidgets is not None:
 
             base = sel[0]
             twist_joints = _list_twist_joints(base)
+            info_message = u"ベースジョイント: {0}".format(base)
+
+            if not twist_joints:
+                reverse_root = _find_reverse_twist_root(base)
+                if reverse_root:
+                    twist_joints = _list_twist_joints(reverse_root)
+                    if twist_joints:
+                        info_message = u"ベースジョイント: {0}\n逆ツイストルート: {1}".format(base, reverse_root)
+
             if not twist_joints:
                 self._populate_table([], message=u"選択したジョイント直下にツイストジョイントが見つかりません。")
                 return
 
-            self._populate_table(twist_joints, message=u"ベースジョイント: {0}".format(base))
+            self._populate_table(twist_joints, message=info_message)
 
         def _populate_table(self, joints, message=""):
             self.table.setRowCount(0)
