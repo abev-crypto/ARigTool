@@ -219,20 +219,23 @@ def apply_check_motion(
     current_frame = start_frame
     _set_default_keys(joint, current_frame, default_value)
 
+    def _set_axis_keyframe(frame: float, axis: str, value: float):
+        _set_default_keys(joint, frame, default_value)
+        cmds.setKeyframe(joint, attribute=f"rotate{axis}", t=frame, v=value)
+
     steps = 0
     for axis in ROTATE_AXES:
         min_value = rotate_min[axis]
         max_value = rotate_max[axis]
-        attribute = f"rotate{axis}"
 
         if _is_non_zero(min_value):
             current_frame += interval
-            cmds.setKeyframe(joint, attribute=attribute, t=current_frame, v=min_value)
+            _set_axis_keyframe(current_frame, axis, min_value)
             steps += 1
 
         if _is_non_zero(max_value):
             current_frame += interval
-            cmds.setKeyframe(joint, attribute=attribute, t=current_frame, v=max_value)
+            _set_axis_keyframe(current_frame, axis, max_value)
             steps += 1
 
     has_keys = steps > 0
