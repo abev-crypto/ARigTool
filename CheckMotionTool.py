@@ -25,6 +25,7 @@ def maya_main_window():
 
 EPSILON = 1.0e-4
 ROTATE_AXES: Sequence[str] = ("X", "Y", "Z")
+_EXCLUDED_JOINT_KEYWORDS: Sequence[str] = ("_half", "_twist", "_sup")
 DEFAULT_MATRIX_DATA = [
     {
         "joint": "Spine",
@@ -120,6 +121,12 @@ def _should_attempt_mirror(joint: str) -> bool:
     if "_L" not in upper and "_R" not in upper:
         return False
     return True
+
+
+def _should_exclude_joint(joint: str) -> bool:
+    short_name = joint.split("|")[-1]
+    lower = short_name.lower()
+    return any(keyword in lower for keyword in _EXCLUDED_JOINT_KEYWORDS)
 
 
 def _chain_group_key_from_joint(joint: str) -> Optional[str]:
@@ -1163,6 +1170,9 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                         for target_joint in targets:
                             if target_joint in processed_joints:
                                 continue
+                            if _should_exclude_joint(target_joint):
+                                processed_joints.add(target_joint)
+                                continue
 
                             try:
                                 result = apply_check_motion(
@@ -1187,6 +1197,9 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
 
                             mirror_joint = self._find_mirror_joint(target_joint, search_root)
                             if mirror_joint and mirror_joint not in processed_joints:
+                                if _should_exclude_joint(mirror_joint):
+                                    processed_joints.add(mirror_joint)
+                                    continue
                                 mirror_min = _mirror_axis_values(member.rotate_min)
                                 mirror_max = _mirror_axis_values(member.rotate_max)
                                 try:
@@ -1215,6 +1228,11 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     continue
 
                 joint_start = current_frame
+                if _should_exclude_joint(config.joint):
+                    processed_joints.add(config.joint)
+                    current_frame = joint_start + interval
+                    index += 1
+                    continue
                 try:
                     result = apply_check_motion(
                         config.joint,
@@ -1238,6 +1256,11 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     else None
                 )
                 if mirror_joint and mirror_joint not in processed_joints:
+                    if _should_exclude_joint(mirror_joint):
+                        processed_joints.add(mirror_joint)
+                        current_frame = next_start
+                        index += 1
+                        continue
                     mirror_min = _mirror_axis_values(config.rotate_min)
                     mirror_max = _mirror_axis_values(config.rotate_max)
                     try:
@@ -1351,6 +1374,9 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             for target_joint in targets:
                 if target_joint in processed_targets:
                     continue
+                if _should_exclude_joint(target_joint):
+                    processed_targets.add(target_joint)
+                    continue
 
                 try:
                     result = apply_check_motion(
@@ -1376,6 +1402,9 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                 for target_joint in targets:
                     mirror_joint = self._find_mirror_joint(target_joint, search_root)
                     if not mirror_joint or mirror_joint in processed_targets:
+                        continue
+                    if _should_exclude_joint(mirror_joint):
+                        processed_targets.add(mirror_joint)
                         continue
 
                     try:
