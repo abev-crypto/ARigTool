@@ -41,6 +41,12 @@ def _list_base_children(joint):
             continue
         if _is_support_joint(child):
             continue
+        short_name = child.split("|")[-1]
+        lowered = short_name.lower()
+        if "twistroot" in lowered:
+            continue
+        if "twist" in lowered:
+            continue
         if cmds.attributeQuery("twistWeight", node=child, exists=True):
             continue
         bases.append(child)
@@ -463,6 +469,29 @@ def _find_reverse_twist_root(base_joint):
     if base_short.endswith("_D"):
         base_short = base_short[:-2]
     candidate_short = base_short + "_twistRoot"
+    # Prefer siblings that contain "twistRoot" in their name and share the same parent
+    parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
+    if parent:
+        siblings = cmds.listRelatives(parent[0], c=True, type="joint", pa=True) or []
+    else:
+        siblings = cmds.ls("|*", type="joint", long=True) or []
+
+    base_long = cmds.ls(base_joint, long=True) or [base_joint]
+    base_long = base_long[0]
+
+    for sibling in siblings:
+        if not sibling or sibling == base_long:
+            continue
+        short_name = sibling.split("|")[-1]
+        if short_name == candidate_short:
+            return sibling
+
+    for sibling in siblings:
+        if not sibling or sibling == base_long:
+            continue
+        if "twistroot" in sibling.split("|")[-1].lower():
+            return sibling
+
     return _find_joint_by_short_name(base_joint, candidate_short)
 
 
