@@ -201,6 +201,11 @@ TOOL_CATEGORIES = [
                 "callback": partial(_run_with_warning, _open_check_motion_tool),
             },
             {
+                "label": u"Bind Skin (Skip Half)",
+                "tooltip": u"選択したジョイント階層からHalfジョイントを除外し、Half_INFジョイントを含めてバインドします。",
+                "callback": partial(_call_module_function, "SkinBindTool", "bind_skin_excluding_half"),
+            },
+            {
                 "label": u"Simple Rig From Ctrl + Joints",
                 "tooltip": u"コントローラーを1つ、続いてジョイントを選択し、複製コントローラーとゼログループを自動配置します。",
                 "callback": partial(_call_module_function, "csimplerig", "simple_rig_from_ctrl_and_joints"),
