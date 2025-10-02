@@ -43,8 +43,8 @@ DEFAULT_MATRIX_DATA = [
     },
     {
         "joint": "Forearm",
-        "min": {"X": -5, "Y": 0, "Z": -5},
-        "max": {"X": 5, "Y": 135, "Z": 5},
+        "min": {"X": 0, "Y": 140, "Z": 0},
+        "max": {"X": 0, "Y": 0, "Z": 0},
     },
     {
         "joint": "Hand",
@@ -52,7 +52,7 @@ DEFAULT_MATRIX_DATA = [
         "max": {"X": 45, "Y": 45, "Z": 30},
     },
     {
-        "joint": ["Thumb", "Thumb1", "Thumb2"],
+        "joint": ["Thumb"],
         "min": {"X": -15, "Y": -10, "Z": -10},
         "max": {"X": 60, "Y": 45, "Z": 45},
     },
