@@ -85,10 +85,12 @@ def _ensure_hierarchy_suffix(joint):
 
 
 
+
+
 def _apply_mirror_transform(node, freeze_scale=True):
     node_long = _to_long(node)
     if not node_long:
-        return None
+        return None, None
     node_short = node_long.split("|")[-1]
     null_name = _uniquify(node_short + "_MirrorNull")
     null = cmds.group(em=True, name=null_name)
@@ -106,10 +108,9 @@ def _apply_mirror_transform(node, freeze_scale=True):
     except Exception:
         if cmds.objExists(null):
             cmds.delete(null)
-        return None
-    if cmds.objExists(null):
-        cmds.delete(null)
-    return node_long
+        return None, None
+    return node_long, null
+
 
 
 def _match_transform(target, source, pos=False, rot=False):
@@ -129,6 +130,7 @@ def _match_transform(target, source, pos=False, rot=False):
         cmds.delete(constraints)
 
 
+
 def _align_with_dummy(source_joint, mirrored_joint):
     source_long = _to_long(source_joint)
     mirrored_long = _to_long(mirrored_joint)
@@ -136,21 +138,30 @@ def _align_with_dummy(source_joint, mirrored_joint):
         return
     mirror_short = mirrored_long.split("|")[-1]
     dummy_short = _uniquify(mirror_short + "_Dummy")
+
+    cleanup_nodes = set()
+    helper_null = None
+    dummy_long = None
     try:
         duplicated = cmds.duplicate(source_long, po=True, n=dummy_short)
     except Exception:
         return
     if not duplicated:
         return
+
+    cleanup_nodes.update(duplicated)
     dummy = duplicated[0]
     dummy_long = _to_long(dummy)
     if not dummy_long:
-        cmds.delete(dummy)
         return
-    dummy_long = _apply_mirror_transform(dummy_long, freeze_scale=False)
+
+    dummy_long, helper_null = _apply_mirror_transform(dummy_long, freeze_scale=False)
+    if helper_null:
+        cleanup_nodes.add(helper_null)
     if not dummy_long:
-        cmds.delete(dummy)
         return
+
+    cleanup_nodes.add(dummy_long)
     try:
         _match_transform(mirrored_long, dummy_long, pos=True, rot=True)
         cmds.rotate(0.0, 180.0, 0.0, mirrored_long, os=True, r=True, pcp=True)
@@ -158,8 +169,14 @@ def _align_with_dummy(source_joint, mirrored_joint):
     except Exception:
         pass
     finally:
-        if cmds.objExists(dummy_long):
-            cmds.delete(dummy_long)
+        existing = []
+        for node in cleanup_nodes:
+            if not cmds.objExists(node):
+                continue
+            node_long = _to_long(node) or node
+            existing.append(node_long)
+        if existing:
+            cmds.delete(list(set(existing)))
 
 
 def _determine_target_parent(source_joint, mirror_map):
@@ -216,10 +233,14 @@ def _create_mirrored_joint(joint, mirror_map):
         cmds.delete(duplicated)
         return None
 
-    duplicated_long = _apply_mirror_transform(duplicated_long, freeze_scale=True)
+    duplicated_long, helper_null = _apply_mirror_transform(duplicated_long, freeze_scale=True)
     if not duplicated_long:
         cmds.warning(u"{0} ?????????????".format(mirror_short))
+        if helper_null and cmds.objExists(helper_null):
+            cmds.delete(helper_null)
         return None
+    if helper_null and cmds.objExists(helper_null):
+        cmds.delete(helper_null)
 
     target_parent = _determine_target_parent(joint_long, mirror_map)
     if target_parent:
