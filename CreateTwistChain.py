@@ -28,11 +28,23 @@ def _is_half_joint(joint):
     )
 
 
+def _is_half_support_joint(joint):
+    short_name = joint.split("|")[-1]
+    lowered = short_name.lower()
+    if "_sup" not in lowered:
+        return False
+    if lowered.startswith("halfsup") or lowered.startswith("half_sup"):
+        return True
+    return "_half" in lowered
+
+
 def _list_base_children(joint):
     children = cmds.listRelatives(joint, c=True, type="joint") or []
     bases = []
     for child in children:
         if _is_half_joint(child):
+            continue
+        if _is_half_support_joint(child):
             continue
         if cmds.attributeQuery("twistWeight", node=child, exists=True):
             continue

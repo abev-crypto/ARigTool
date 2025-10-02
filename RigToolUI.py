@@ -178,7 +178,7 @@ TOOL_CATEGORIES = [
             {
                 "label": u"Create Half Rotation Joint",
                 "tooltip": u"選択したジョイントに半回転ジョイントとINFジョイントを生成し、回転を0.5倍に接続します。",
-                "callback": partial(_call_module_function, "CreateHalfRotJoint", "create_half_rotation_joint"),
+                "callback": partial(_call_module_function, "CreateHalfRotJoint", "show_half_rotation_dialog"),
             },
             {
                 "label": u"Create Support Joint",
