@@ -9,7 +9,7 @@ import json
 import re
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from PySide2 import QtCore, QtWidgets
+from PySide2 import QtCore, QtGui, QtWidgets
 import maya.cmds as cmds
 
 
@@ -40,7 +40,6 @@ MIRROR_KEYWORDS: Sequence[str] = (
     "Foot",
     "Toe",
 )
-
 DEFAULT_MATRIX_DATA = [
     {
         "joint": "Spine",
@@ -119,11 +118,8 @@ DEFAULT_MATRIX_DATA = [
     },
 ]
 
-
 def _is_non_zero(value: float) -> bool:
     return abs(value) > EPSILON
-
-
 
 def _should_attempt_mirror(joint: str) -> bool:
     short_name = joint.split("|")[-1]
@@ -385,7 +381,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.batch_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         for col in range(1, 7):
             self.batch_table.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
-
         self.table_sign_button = QtWidgets.QPushButton(u"±")
         self.table_copy_button = QtWidgets.QPushButton(u"Copy")
         self.table_paste_button = QtWidgets.QPushButton(u"Paste")
@@ -401,7 +396,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.reset_defaults_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self.load_json_button = QtWidgets.QPushButton(u"Load JSON")
         self.save_json_button = QtWidgets.QPushButton(u"Save JSON")
-
         self.add_row_button = QtWidgets.QPushButton(u"Add Row")
         self.remove_row_button = QtWidgets.QPushButton(u"Remove Selected")
 
@@ -557,7 +551,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         for joint, rotate_min, rotate_max in matrix_entries:
             self._add_row(joint)
             self._set_row_values(self.batch_table.rowCount() - 1, rotate_min, rotate_max)
-
         self._copied_row_values = None
 
     def _create_spin_cell(self) -> QtWidgets.QDoubleSpinBox:
