@@ -154,6 +154,9 @@ def _collect_twist_data(start):
     weights = []
     scales = []
     driven = {}
+    reverse_values = []
+    reverse_attr = "reverseTwistWeight"
+    reverse_twist = False
     for j in twist_joints:
         try:
             weights.append(cmds.getAttr(j + ".twistWeight"))
@@ -166,14 +169,30 @@ def _collect_twist_data(start):
                 scales.append(1.0)
         else:
             scales.append(1.0)
+        if cmds.attributeQuery(reverse_attr, node=j, exists=True):
+            reverse_twist = True
+            try:
+                reverse_values.append(cmds.getAttr(j + "." + reverse_attr))
+            except Exception:
+                reverse_values.append(None)
+        else:
+            reverse_values.append(None)
         driven[j] = _list_driven_attributes(j)
+
+    joint_count = len(twist_joints)
+    segment_count = joint_count - 1 if reverse_twist and joint_count > 0 else joint_count
+
     return {
         "start": start,
         "weights": weights,
         "scales": scales,
-        "count": len(twist_joints),
+        "count": segment_count,
+        "joint_count": joint_count,
         "joints": twist_joints,
         "driven": driven,
+        "reverse_twist": reverse_twist,
+        "reverse_attr": reverse_attr if reverse_twist else None,
+        "reverse_values": reverse_values if reverse_twist else None,
     }
 
 
@@ -208,7 +227,8 @@ def _build_twist_chain(data, mirror_start):
         cmds.warning(u"ミラー先ジョイント {0} が存在しません。".format(mirror_start))
         return
 
-    if data.get("count", 0) <= 0:
+    joint_count = data.get("joint_count", 0)
+    if joint_count <= 0:
         return
 
     base_candidates = _list_base_children(mirror_start)
@@ -225,7 +245,11 @@ def _build_twist_chain(data, mirror_start):
     scale_at_90 = data["scales"][-1] if data["scales"] else 1.0
     try:
         cmds.select([mirror_start], r=True)
-        created = create_twist_chain(count=data["count"], scale_at_90=scale_at_90)
+        created = create_twist_chain(
+            count=data.get("count", joint_count),
+            scale_at_90=scale_at_90,
+            reverse_twist=data.get("reverse_twist", False),
+        )
     finally:
         if prev_sel:
             cmds.select(prev_sel, r=True)
@@ -235,7 +259,7 @@ def _build_twist_chain(data, mirror_start):
     if not created:
         return
 
-    created = created[: data["count"]]
+    created = created[: joint_count]
 
     for idx, joint in enumerate(created):
         if idx >= len(data["weights"]):
@@ -253,6 +277,17 @@ def _build_twist_chain(data, mirror_start):
                 cmds.setAttr(joint + ".twistScaleMax", scale_max)
             except Exception:
                 pass
+        if data.get("reverse_twist"):
+            reverse_values = data.get("reverse_values") or []
+            if idx < len(reverse_values):
+                reverse_value = reverse_values[idx]
+                if reverse_value is not None and data.get("reverse_attr"):
+                    attr_name = data["reverse_attr"]
+                    if cmds.attributeQuery(attr_name, node=joint, exists=True):
+                        try:
+                            cmds.setAttr(f"{joint}.{attr_name}", reverse_value)
+                        except Exception:
+                            pass
         if src_joint:
             attrs = data["driven"].get(src_joint, [])
             _copy_driven_keys(src_joint, joint, attrs)
