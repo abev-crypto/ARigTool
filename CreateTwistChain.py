@@ -40,6 +40,266 @@ def _list_base_children(joint):
     return bases
 
 
+def _create_standard_twist_chain(start, ref, base_tag, start_short, length, base_radius, count, scale_at_90):
+    pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
+    cmds.setAttr(pma_sub + ".operation", 2)  # subtract
+    cmds.connectAttr(ref + ".rotateX", pma_sub + ".input1D[0]", f=True)
+    cmds.connectAttr(start + ".rotateX", pma_sub + ".input1D[1]", f=True)
+
+    abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
+    cmds.setAttr(abs_neg + ".input2", -1)
+    cmds.connectAttr(pma_sub + ".output1D", abs_neg + ".input1", f=True)
+
+    cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
+    cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
+    cmds.setAttr(cond_abs + ".secondTerm", 0)
+    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".firstTerm", f=True)
+    cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
+    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".colorIfFalseR", f=True)
+
+    twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
+    cmds.setAttr(twist_range + ".minX", 0)
+    cmds.setAttr(twist_range + ".maxX", 1)
+    cmds.setAttr(twist_range + ".oldMinX", 0)
+    cmds.setAttr(twist_range + ".oldMaxX", 90)
+    cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
+
+    created = []
+    for idx in range(count):
+        step_index = idx + 1
+        ratio = float(step_index) / float(count + 1)
+
+        suffix = f"{step_index:02d}"
+        jnt_name = f"{start_short}_twist{suffix}"
+        j = cmds.duplicate(start, po=True, n=jnt_name)[0]
+
+        if cmds.attributeQuery("radius", node=j, exists=True):
+            try:
+                cmds.setAttr(j + ".radius", base_radius * 2.0)
+            except Exception:
+                pass
+
+        try:
+            cmds.parent(j, start)
+        except Exception:
+            pass
+
+        cmds.setAttr(j + ".translateY", 0)
+        cmds.setAttr(j + ".translateZ", 0)
+        cmds.setAttr(j + ".translateX", length * ratio)
+
+        for ax in ("X", "Y", "Z"):
+            try:
+                cmds.setAttr(j + ".rotate" + ax, l=False, k=True, cb=True)
+            except Exception:
+                pass
+
+        if cmds.objExists(j + ".segmentScaleCompensate"):
+            try:
+                cmds.setAttr(j + ".segmentScaleCompensate", 0)
+            except Exception:
+                pass
+
+        node_suffix = f"{step_index:02d}"
+
+        md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_MD")
+        cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
+
+        pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
+        cmds.setAttr(pma_add + ".operation", 1)
+        cmds.connectAttr(start + ".rotateX", pma_add + ".input1D[0]", f=True)
+        cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
+
+        cmds.connectAttr(pma_add + ".output1D", j + ".rotateX", f=True)
+        for ax in ("Y", "Z"):
+            cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
+
+        ratio_attr = "twistWeight"
+        if not cmds.attributeQuery(ratio_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=ratio_attr, at="double", min=0.0, dv=ratio)
+            cmds.setAttr(j + "." + ratio_attr, e=True, k=True)
+        cmds.setAttr(j + "." + ratio_attr, ratio)
+        cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
+
+        scale_factor = float(step_index)
+        scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
+        scale_attr = "twistScaleMax"
+        if not cmds.attributeQuery(scale_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=scale_ratio)
+            cmds.setAttr(j + "." + scale_attr, e=True, k=True)
+        else:
+            cmds.setAttr(j + "." + scale_attr, scale_ratio)
+
+        delta_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scaleDelta_ADL")
+        cmds.connectAttr(j + "." + scale_attr, delta_add + ".input1", f=True)
+        cmds.setAttr(delta_add + ".input2", -1)
+
+        scale_md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scale_MD")
+        cmds.connectAttr(twist_range + ".outValueX", scale_md + ".input1", f=True)
+        cmds.connectAttr(delta_add + ".output", scale_md + ".input2", f=True)
+
+        scale_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scale_ADL")
+        cmds.connectAttr(scale_md + ".output", scale_add + ".input1", f=True)
+        cmds.setAttr(scale_add + ".input2", 1)
+
+        cmds.connectAttr(scale_add + ".output", j + ".scaleY", f=True)
+        cmds.connectAttr(scale_add + ".output", j + ".scaleZ", f=True)
+
+        created.append(j)
+
+    return created
+
+
+def _create_reverse_twist_chain(
+    start,
+    base_tag,
+    start_short,
+    length,
+    base_radius,
+    count,
+    scale_at_90,
+    start_parent=None,
+):
+    abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
+    cmds.setAttr(abs_neg + ".input2", -1)
+    cmds.connectAttr(start + ".rotateX", abs_neg + ".input1", f=True)
+
+    cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
+    cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
+    cmds.setAttr(cond_abs + ".secondTerm", 0)
+    cmds.connectAttr(start + ".rotateX", cond_abs + ".firstTerm", f=True)
+    cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
+    cmds.connectAttr(start + ".rotateX", cond_abs + ".colorIfFalseR", f=True)
+
+    twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
+    cmds.setAttr(twist_range + ".minX", 0)
+    cmds.setAttr(twist_range + ".maxX", 1)
+    cmds.setAttr(twist_range + ".oldMinX", 0)
+    cmds.setAttr(twist_range + ".oldMaxX", 90)
+    cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
+
+    created = []
+
+    root_name = f"{start_short}_twistRoot"
+    root = cmds.duplicate(start, po=True, n=root_name)[0]
+
+    if cmds.attributeQuery("radius", node=root, exists=True):
+        try:
+            cmds.setAttr(root + ".radius", base_radius * 2.0)
+        except Exception:
+            pass
+
+    try:
+        cmds.parent(root, w=True)
+    except Exception:
+        pass
+
+    if start_parent:
+        try:
+            cmds.parent(root, start_parent)
+        except Exception:
+            pass
+
+    if cmds.objExists(root + ".segmentScaleCompensate"):
+        try:
+            cmds.setAttr(root + ".segmentScaleCompensate", 0)
+        except Exception:
+            pass
+
+    try:
+        cmds.setAttr(root + ".rotateX", l=False, k=True, cb=True)
+        cmds.setAttr(root + ".rotateX", 0)
+        cmds.setAttr(root + ".rotateX", l=True, k=False, cb=False)
+    except Exception:
+        pass
+
+    for ax in ("Y", "Z"):
+        try:
+            cmds.setAttr(root + ".rotate" + ax, l=False, k=True, cb=True)
+            cmds.connectAttr(start + ".rotate" + ax, root + ".rotate" + ax, f=True)
+        except Exception:
+            pass
+
+    created.append(root)
+
+    for idx in range(1, count + 1):
+        ratio = float(idx) / float(count + 1)
+        suffix = f"{idx:02d}"
+        jnt_name = f"{start_short}_twist{suffix}"
+        j = cmds.duplicate(start, po=True, n=jnt_name)[0]
+
+        if cmds.attributeQuery("radius", node=j, exists=True):
+            try:
+                cmds.setAttr(j + ".radius", base_radius * 2.0)
+            except Exception:
+                pass
+
+        try:
+            cmds.parent(j, root)
+        except Exception:
+            pass
+
+        cmds.setAttr(j + ".translateY", 0)
+        cmds.setAttr(j + ".translateZ", 0)
+        cmds.setAttr(j + ".translateX", length * ratio)
+
+        try:
+            cmds.setAttr(j + ".rotateX", l=False, k=True, cb=True)
+        except Exception:
+            pass
+
+        for ax in ("Y", "Z"):
+            try:
+                cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
+            except Exception:
+                pass
+
+        if cmds.objExists(j + ".segmentScaleCompensate"):
+            try:
+                cmds.setAttr(j + ".segmentScaleCompensate", 0)
+            except Exception:
+                pass
+
+        ratio_attr = "twistWeight"
+        if not cmds.attributeQuery(ratio_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=ratio_attr, at="double", min=0.0, dv=ratio)
+            cmds.setAttr(j + "." + ratio_attr, e=True, k=True)
+        cmds.setAttr(j + "." + ratio_attr, ratio)
+
+        md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{suffix}_MD")
+        cmds.connectAttr(start + ".rotateX", md + ".input1", f=True)
+        cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
+        cmds.connectAttr(md + ".output", j + ".rotateX", f=True)
+
+        scale_factor = float(idx)
+        scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
+        scale_attr = "twistScaleMax"
+        if not cmds.attributeQuery(scale_attr, node=j, exists=True):
+            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=scale_ratio)
+            cmds.setAttr(j + "." + scale_attr, e=True, k=True)
+        else:
+            cmds.setAttr(j + "." + scale_attr, scale_ratio)
+
+        delta_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{suffix}_scaleDelta_ADL")
+        cmds.connectAttr(j + "." + scale_attr, delta_add + ".input1", f=True)
+        cmds.setAttr(delta_add + ".input2", -1)
+
+        scale_md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{suffix}_scale_MD")
+        cmds.connectAttr(twist_range + ".outValueX", scale_md + ".input1", f=True)
+        cmds.connectAttr(delta_add + ".output", scale_md + ".input2", f=True)
+
+        scale_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{suffix}_scale_ADL")
+        cmds.connectAttr(scale_md + ".output", scale_add + ".input1", f=True)
+        cmds.setAttr(scale_add + ".input2", 1)
+
+        cmds.connectAttr(scale_add + ".output", j + ".scaleY", f=True)
+        cmds.connectAttr(scale_add + ".output", j + ".scaleZ", f=True)
+
+        created.append(j)
+
+    return created
+
+
 def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist=False):
     sel = cmds.ls(sl=True, type="joint") or []
     if not sel:
@@ -71,11 +331,6 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
     if length < 1e-5:
         cmds.error(u"開始ジョイントと参照ジョイントの位置が同一です。")
 
-    pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
-    cmds.setAttr(pma_sub + ".operation", 2)  # subtract
-    cmds.connectAttr(ref + ".rotateX", pma_sub + ".input1D[0]", f=True)
-    cmds.connectAttr(start + ".rotateX", pma_sub + ".input1D[1]", f=True)
-
     base_radius = 1.0
     if cmds.attributeQuery("radius", node=start, exists=True):
         try:
@@ -83,129 +338,31 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
         except Exception:
             base_radius = 1.0
 
-    abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
-    cmds.setAttr(abs_neg + ".input2", -1)
-    cmds.connectAttr(pma_sub + ".output1D", abs_neg + ".input1", f=True)
+    start_parent = cmds.listRelatives(start, p=True, pa=True) or []
+    start_parent = start_parent[0] if start_parent else None
 
-    cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
-    cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
-    cmds.setAttr(cond_abs + ".secondTerm", 0)
-    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".firstTerm", f=True)
-    cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
-    cmds.connectAttr(pma_sub + ".output1D", cond_abs + ".colorIfFalseR", f=True)
-
-    twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
-    cmds.setAttr(twist_range + ".minX", 0)
-    cmds.setAttr(twist_range + ".maxX", 1)
-    cmds.setAttr(twist_range + ".oldMinX", 0)
-    cmds.setAttr(twist_range + ".oldMaxX", 90)
-    cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
-
-    created = []
-    total = count + 1 if reverse_twist else count
-    for idx in range(total):
-        step_index = idx if reverse_twist else idx + 1
-        ratio = float(step_index) / float(count + 1)
-
-        suffix = "Root" if reverse_twist and step_index == 0 else f"{step_index:02d}"
-        jnt_name = f"{start_short}_twist{suffix}"
-        j = cmds.duplicate(start, po=True, n=jnt_name)[0]
-
-        if cmds.attributeQuery("radius", node=j, exists=True):
-            try:
-                cmds.setAttr(j + ".radius", base_radius * 2.0)
-            except Exception:
-                pass
-
-        try:
-            cmds.parent(j, start)
-        except Exception:
-            pass
-
-        cmds.setAttr(j + ".translateY", 0)
-        cmds.setAttr(j + ".translateZ", 0)
-        cmds.setAttr(j + ".translateX", length * ratio)
-
-        for ax in ("X", "Y", "Z"):
-            try:
-                cmds.setAttr(j + ".rotate" + ax, l=False, k=True, cb=True)
-            except Exception:
-                pass
-
-        if cmds.objExists(j + ".segmentScaleCompensate"):
-            try:
-                cmds.setAttr(j + ".segmentScaleCompensate", 0)
-            except Exception:
-                pass
-
-        node_suffix = "Root" if reverse_twist and step_index == 0 else f"{step_index:02d}"
-
-        md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_MD")
-        cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
-
-        pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
-        cmds.setAttr(pma_add + ".operation", 1)
-        cmds.connectAttr(start + ".rotateX", pma_add + ".input1D[0]", f=True)
-        cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
-
-        final_output = pma_add + ".output1D"
-        if reverse_twist:
-            reverse_attr = "reverseTwistWeight"
-            reverse_value = max(0.0, 1.0 - ratio)
-            if not cmds.attributeQuery(reverse_attr, node=j, exists=True):
-                cmds.addAttr(j, ln=reverse_attr, at="double", min=0.0, dv=reverse_value)
-                cmds.setAttr(j + "." + reverse_attr, e=True, k=True)
-            cmds.setAttr(j + "." + reverse_attr, reverse_value)
-
-            rev_md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_reverse_MDL")
-            cmds.connectAttr(start + ".rotateX", rev_md + ".input1", f=True)
-            cmds.connectAttr(j + "." + reverse_attr, rev_md + ".input2", f=True)
-
-            rev_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_reverseNeg_MDL")
-            cmds.setAttr(rev_neg + ".input2", -1)
-            cmds.connectAttr(rev_md + ".output", rev_neg + ".input1", f=True)
-
-            final_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{node_suffix}_reverse_ADL")
-            cmds.connectAttr(pma_add + ".output1D", final_add + ".input1", f=True)
-            cmds.connectAttr(rev_neg + ".output", final_add + ".input2", f=True)
-            final_output = final_add + ".output"
-
-        cmds.connectAttr(final_output, j + ".rotateX", f=True)
-        for ax in ("Y", "Z"):
-            cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
-
-        ratio_attr = "twistWeight"
-        if not cmds.attributeQuery(ratio_attr, node=j, exists=True):
-            cmds.addAttr(j, ln=ratio_attr, at="double", min=0.0, dv=ratio)
-            cmds.setAttr(j + "." + ratio_attr, e=True, k=True)
-        cmds.setAttr(j + "." + ratio_attr, ratio)
-        cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
-
-        scale_factor = float(step_index) if step_index > 0 else 0.0
-        scale_raito = (scale_at_90 - 1) * scale_factor / float(count) + 1
-        scale_attr = "twistScaleMax"
-        if not cmds.attributeQuery(scale_attr, node=j, exists=True):
-            cmds.addAttr(j, ln=scale_attr, at="double", min=0.0, dv=scale_raito)
-            cmds.setAttr(j + "." + scale_attr, e=True, k=True)
-        else:
-            cmds.setAttr(j + "." + scale_attr, scale_raito)
-
-        delta_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scaleDelta_ADL")
-        cmds.connectAttr(j + "." + scale_attr, delta_add + ".input1", f=True)
-        cmds.setAttr(delta_add + ".input2", -1)
-
-        scale_md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scale_MD")
-        cmds.connectAttr(twist_range + ".outValueX", scale_md + ".input1", f=True)
-        cmds.connectAttr(delta_add + ".output", scale_md + ".input2", f=True)
-
-        scale_add = cmds.createNode("addDoubleLinear", n=f"{base_tag}_twist{node_suffix}_scale_ADL")
-        cmds.connectAttr(scale_md + ".output", scale_add + ".input1", f=True)
-        cmds.setAttr(scale_add + ".input2", 1)
-
-        cmds.connectAttr(scale_add + ".output", j + ".scaleY", f=True)
-        cmds.connectAttr(scale_add + ".output", j + ".scaleZ", f=True)
-
-        created.append(j)
+    if reverse_twist:
+        created = _create_reverse_twist_chain(
+            start=start,
+            base_tag=base_tag,
+            start_short=start_short,
+            length=length,
+            base_radius=base_radius,
+            count=count,
+            scale_at_90=scale_at_90,
+            start_parent=start_parent,
+        )
+    else:
+        created = _create_standard_twist_chain(
+            start=start,
+            ref=ref,
+            base_tag=base_tag,
+            start_short=start_short,
+            length=length,
+            base_radius=base_radius,
+            count=count,
+            scale_at_90=scale_at_90,
+        )
 
     layer_name = "twist_jnt"
     if cmds.objExists(layer_name):
@@ -220,6 +377,9 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
     except Exception:
         pass
 
+    cmds.select(created, r=True)
+    print(u"[Twist] 作成:", created)
+
     if reverse_twist:
         start_short_name = start.split("|")[-1]
         if not start_short_name.endswith("_D"):
@@ -232,14 +392,12 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
                 )
             else:
                 try:
-                    start = cmds.rename(start, new_short_name)
+                    cmds.rename(start, new_short_name)
                 except RuntimeError as exc:
                     cmds.warning(
                         u"{0} のリネームに失敗しました: {1}".format(start_short_name, exc)
                     )
 
-    cmds.select(created, r=True)
-    print(u"[Twist] 作成:", created)
     return created
 
 
