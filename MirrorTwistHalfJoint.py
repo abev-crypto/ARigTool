@@ -107,27 +107,33 @@ def _mirror_path(path):
     return prefix + "|".join(mirrored)
 
 
-def _find_reverse_twist_root(start):
-    parent = cmds.listRelatives(start, p=True, f=True) or []
-    parent = parent[0] if parent else None
+def _find_joint_by_short_name(base_joint, short_name):
+    parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
+    search_candidates = []
+    if parent:
+        siblings = cmds.listRelatives(parent[0], c=True, type="joint", pa=True) or []
+        search_candidates.extend(siblings)
+    matches = cmds.ls(short_name, type="joint", long=True) or []
+    search_candidates.extend(matches)
 
+    seen = set()
+    for candidate in search_candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.split("|")[-1] == short_name:
+            return candidate
+    return None
+
+
+def _find_reverse_twist_root(start):
     short_name = start.split("|")[-1]
     base_short = _strip_reverse_suffix(short_name)
     if not base_short:
         return None
 
     target_short = f"{base_short}_twistRoot"
-
-    if parent:
-        siblings = cmds.listRelatives(parent, c=True, f=True) or []
-        for sibling in siblings:
-            if sibling == start:
-                continue
-            if sibling.split("|")[-1] == target_short:
-                return sibling
-
-    candidates = cmds.ls(target_short, l=True) or []
-    return candidates[0] if candidates else None
+    return _find_joint_by_short_name(start, target_short)
 
 
 def _list_twist_children(joint):
