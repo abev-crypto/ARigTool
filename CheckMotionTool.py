@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from PySide2 import QtCore, QtWidgets
 import maya.cmds as cmds
@@ -23,11 +23,30 @@ def maya_main_window():
 
 EPSILON = 1.0e-4
 ROTATE_AXES: Sequence[str] = ("X", "Y", "Z")
+MIRROR_KEYWORDS: Sequence[str] = (
+    "Clavicle",
+    "Upperarm",
+    "Forearm",
+    "Hand",
+    "Thumb",
+    "Index",
+    "Middle",
+    "Ring",
+    "Pinky",
+    "Thigh",
+    "Calf",
+    "Foot",
+    "Toe",
+)
 
 
 def _is_non_zero(value: float) -> bool:
     return abs(value) > EPSILON
 
+def _should_attempt_mirror(joint: str) -> bool:
+    short_name = joint.split("|")[-1]
+    lower = short_name.lower()
+    return any(keyword.lower() in lower for keyword in MIRROR_KEYWORDS)
 
 def _cut_rotate_keys(joint: str):
     rotate_attrs = [f"rotate{axis}" for axis in ROTATE_AXES]
@@ -45,7 +64,35 @@ def _set_default_keys(joint: str, frame: float, value: float = 0.0):
     for axis in ROTATE_AXES:
         cmds.setKeyframe(joint, attribute=f"rotate{axis}", t=frame, v=value)
 
+def _mirror_axis_values(values: Dict[str, float]) -> Dict[str, float]:
+    mirrored: Dict[str, float] = {}
+    for axis in ROTATE_AXES:
+        value = float(values.get(axis, 0.0))
+        if axis == "Z":
+            value = -value
+        mirrored[axis] = value
+    return mirrored
 
+
+def _list_descendant_joints(root: str) -> List[str]:
+    if not cmds.objExists(root):
+        return []
+
+    long_names = cmds.ls(root, long=True)
+    if not long_names:
+        return []
+
+    root_long = long_names[0]
+    descendants = cmds.listRelatives(root_long, ad=True, type="joint", fullPath=True) or []
+    descendants.append(root_long)
+    return descendants
+
+
+def _to_long_name(node: str) -> Optional[str]:
+    names = cmds.ls(node, long=True)
+    if names:
+        return names[0]
+    return None
 @dataclass
 class CheckMotionResult:
     joint: str
@@ -206,6 +253,10 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.tab_widget = QtWidgets.QTabWidget()
 
         # Batch tab widgets
+        self.batch_root_edit = QtWidgets.QLineEdit()
+        self.batch_root_edit.setPlaceholderText(u"Search Root (optional)")
+        self.batch_root_edit.setReadOnly(True)
+        self.batch_root_button = QtWidgets.QPushButton(u"Get Selection")
         self.batch_table = QtWidgets.QTableWidget(0, 7)
         self.batch_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.batch_table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
@@ -257,6 +308,11 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
     def _create_layout(self):
         batch_tab = QtWidgets.QWidget()
         batch_layout = QtWidgets.QVBoxLayout(batch_tab)
+        root_layout = QtWidgets.QHBoxLayout()
+        root_layout.addWidget(QtWidgets.QLabel(u"Search Root:"))
+        root_layout.addWidget(self.batch_root_edit)
+        root_layout.addWidget(self.batch_root_button)
+        batch_layout.addLayout(root_layout)
         batch_layout.addWidget(self.batch_table)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -298,6 +354,7 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         main_layout.addWidget(self.tab_widget)
 
     def _create_connections(self):
+        self.batch_root_button.clicked.connect(self._on_get_batch_root)
         self.add_row_button.clicked.connect(self._on_add_row)
         self.remove_row_button.clicked.connect(self._on_remove_selected_rows)
         self.apply_batch_button.clicked.connect(self._on_apply_batch_clicked)
@@ -305,35 +362,35 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.apply_single_button.clicked.connect(self._on_apply_single_clicked)
 
     # Batch tab -----------------------------------------------------------
+    def _on_get_batch_root(self):
+        selection = cmds.ls(selection=True, type="joint") or []
+        if not selection:
+            cmds.warning(u"検索開始ジョイントを選択してください。")
+            return
+
+        long_name = _to_long_name(selection[0])
+        if not long_name:
+            cmds.warning(u"選択ジョイントのロングネームを取得できませんでした。")
+            return
+
+        self.batch_root_edit.setText(long_name)
+
     def _populate_default_rows(self):
         default_joints = [
             "Spine",
             "Clavicle_L",
-            "Clavicle_R",
             "Upperarm_L",
-            "Upperarm_R",
             "Forearm_L",
-            "Forearm_R",
             "Hand_L",
-            "Hand_R",
             "Thumb_L",
-            "Thumb_R",
             "Index_L",
-            "Index_R",
             "Middle_L",
-            "Middle_R",
             "Ring_L",
-            "Ring_R",
             "Pinky_L",
-            "Pinky_R",
             "Thigh_L",
-            "Thigh_R",
             "Calf_L",
-            "Calf_R",
             "Foot_L",
-            "Foot_R",
             "Toe_L",
-            "Toe_R",
             "Neck",
         ]
 
@@ -390,6 +447,45 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             configs.append((joint, rotate_min, rotate_max))
         return configs
 
+    def _get_batch_search_root(self) -> Optional[str]:
+        root_text = self.batch_root_edit.text().strip()
+        if not root_text:
+            return None
+
+        long_name = _to_long_name(root_text)
+        if not long_name:
+            cmds.warning(u"検索開始ジョイント '{0}' が見つかりません。".format(root_text))
+            return None
+        return long_name
+
+    def _resolve_joint_entry(self, entry: str, search_root: Optional[str]) -> Optional[str]:
+        entry = entry.strip()
+        if not entry:
+            return None
+
+        long_name = _to_long_name(entry)
+        if long_name:
+            return long_name
+
+        search_space: List[str] = []
+        if search_root and cmds.objExists(search_root):
+            search_space = _list_descendant_joints(search_root)
+        if not search_space:
+            search_space = cmds.ls(type="joint", long=True) or []
+
+        entry_lower = entry.lower()
+        exact_matches = [node for node in search_space if node.split("|")[-1] == entry]
+        if exact_matches:
+            return exact_matches[0]
+
+        partial_matches = [node for node in search_space if entry_lower in node.split("|")[-1].lower()]
+        if len(partial_matches) == 1:
+            return partial_matches[0]
+        if len(partial_matches) > 1:
+            partial_matches.sort(key=len)
+            return partial_matches[0]
+        return None
+      
     def _on_apply_batch_clicked(self):
         configs = _order_joint_configs(self._gather_batch_configs())
         if not configs:
@@ -398,14 +494,23 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
 
         start_frame = float(self.batch_start_spin.value())
         interval = float(self.batch_interval_spin.value())
+        search_root = self._get_batch_search_root()
 
         results: List[CheckMotionResult] = []
         errors: List[str] = []
+        processed: Set[str] = set()
 
         cmds.undoInfo(openChunk=True, chunkName="CreateCheckMotionBatch")
         try:
             current_frame = start_frame
-            for joint, rotate_min, rotate_max in configs:
+            for entry, rotate_min, rotate_max in configs:
+                joint = self._resolve_joint_entry(entry, search_root)
+                if not joint:
+                    errors.append(u"ジョイント '{0}' が見つかりません。".format(entry))
+                    continue
+
+                if joint in processed:
+                    continue
                 joint_start = current_frame
                 try:
                     result = apply_check_motion(joint, rotate_min, rotate_max, joint_start, interval)
@@ -414,10 +519,30 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                     continue
 
                 results.append(result)
-                if result.has_keys:
-                    current_frame = result.end_frame + interval
-                else:
-                    current_frame = joint_start + interval
+                processed.add(joint)
+                next_start = result.end_frame + interval if result.has_keys else joint_start + interval
+
+                mirror_joint = self._find_mirror_joint(joint, search_root)
+                if mirror_joint and mirror_joint not in processed:
+                    mirror_min = _mirror_axis_values(rotate_min)
+                    mirror_max = _mirror_axis_values(rotate_max)
+                    try:
+                        mirror_result = apply_check_motion(
+                            mirror_joint, mirror_min, mirror_max, next_start, interval
+                        )
+                    except ValueError as exc:
+                        errors.append(str(exc))
+                        current_frame = next_start
+                    else:
+                        results.append(mirror_result)
+                        processed.add(mirror_joint)
+                        if mirror_result.has_keys:
+                            current_frame = mirror_result.end_frame + interval
+                        else:
+                            current_frame = next_start + interval
+                    continue
+
+                current_frame = next_start
         finally:
             cmds.undoInfo(closeChunk=True)
 
@@ -430,6 +555,19 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
                 cmds.warning(error)
 
     # Single tab ----------------------------------------------------------
+    @staticmethod
+    def _get_joint_root(joint: str) -> Optional[str]:
+        long_name = _to_long_name(joint)
+        if not long_name:
+            return None
+
+        current = long_name
+        while True:
+            parent = cmds.listRelatives(current, parent=True, type="joint", fullPath=True)
+            if not parent:
+                return current
+            current = parent[0]
+
     def _on_get_single_joint(self):
         selection = cmds.ls(selection=True, type="joint") or []
         if not selection:
@@ -473,23 +611,31 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             cmds.warning(u"ジョイントが選択されていません。")
             return
 
+        joint_long = _to_long_name(joint)
+        if joint_long:
+            joint = joint_long
+
         rotate_min, rotate_max = self.single_axis_widget.get_values()
         start_frame = float(self.single_start_spin.value())
         if start_frame == 0:
             start_frame = float(cmds.currentTime(query=True))
         interval = float(self.single_interval_spin.value())
 
+        search_root = self._get_joint_root(joint)
+
         cmds.undoInfo(openChunk=True, chunkName="CreateCheckMotionSingle")
         try:
             result = apply_check_motion(joint, rotate_min, rotate_max, start_frame, interval)
 
-            mirror_joint = self._find_mirror_joint(joint)
+            mirror_joint = self._find_mirror_joint(joint, search_root)
             if mirror_joint:
+                mirror_min = _mirror_axis_values(rotate_min)
+                mirror_max = _mirror_axis_values(rotate_max)
                 mirror_start = result.end_frame + interval if result.has_keys else start_frame + interval
                 apply_check_motion(
                     mirror_joint,
-                    rotate_min,
-                    rotate_max,
+                    mirror_min,
+                    mirror_max,
                     mirror_start,
                     interval,
                 )
@@ -499,16 +645,46 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             cmds.undoInfo(closeChunk=True)
 
     @staticmethod
-    def _find_mirror_joint(joint: str) -> Optional[str]:
-        if joint.endswith("_L"):
-            candidate = joint[:-2] + "_R"
-        elif joint.endswith("_R"):
-            candidate = joint[:-2] + "_L"
-        else:
+    def _find_mirror_joint(joint: str, search_root: Optional[str] = None) -> Optional[str]:
+        long_name = _to_long_name(joint)
+        if not long_name:
             return None
 
-        if cmds.objExists(candidate):
-            return candidate
+        short_name = long_name.split("|")[-1]
+        if not _should_attempt_mirror(short_name):
+            return None
+
+        base_name, side = _split_side(short_name)
+        if side == "C":
+            return None
+
+        mirror_side = "R" if side == "L" else "L"
+        expected_short = f"{base_name}_{mirror_side}"
+
+        if search_root and cmds.objExists(search_root):
+            search_space = _list_descendant_joints(search_root)
+        else:
+            search_space = cmds.ls(type="joint", long=True) or []
+
+        matches = [node for node in search_space if node.split("|")[-1] == expected_short]
+        if matches:
+            matches.sort(key=len)
+            return matches[0]
+
+        parent_path = "|".join(long_name.split("|")[:-1])
+        if parent_path:
+            candidate = parent_path + "|" + expected_short
+        else:
+            candidate = expected_short
+
+        candidate_long = _to_long_name(candidate)
+        if candidate_long:
+            return candidate_long
+
+        fallback = cmds.ls(f"*{expected_short}", type="joint", long=True) or []
+        if fallback:
+            fallback.sort(key=len)
+            return fallback[0]
         return None
 
 
