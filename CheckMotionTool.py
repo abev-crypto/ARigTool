@@ -43,12 +43,10 @@ MIRROR_KEYWORDS: Sequence[str] = (
 def _is_non_zero(value: float) -> bool:
     return abs(value) > EPSILON
 
-
 def _should_attempt_mirror(joint: str) -> bool:
     short_name = joint.split("|")[-1]
     lower = short_name.lower()
     return any(keyword.lower() in lower for keyword in MIRROR_KEYWORDS)
-
 
 def _cut_rotate_keys(joint: str):
     rotate_attrs = [f"rotate{axis}" for axis in ROTATE_AXES]
@@ -65,7 +63,6 @@ def _cut_rotate_keys(joint: str):
 def _set_default_keys(joint: str, frame: float, value: float = 0.0):
     for axis in ROTATE_AXES:
         cmds.setKeyframe(joint, attribute=f"rotate{axis}", t=frame, v=value)
-
 
 def _mirror_axis_values(values: Dict[str, float]) -> Dict[str, float]:
     mirrored: Dict[str, float] = {}
@@ -96,8 +93,6 @@ def _to_long_name(node: str) -> Optional[str]:
     if names:
         return names[0]
     return None
-
-
 @dataclass
 class CheckMotionResult:
     joint: str
@@ -262,7 +257,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         self.batch_root_edit.setPlaceholderText(u"Search Root (optional)")
         self.batch_root_edit.setReadOnly(True)
         self.batch_root_button = QtWidgets.QPushButton(u"Get Selection")
-
         self.batch_table = QtWidgets.QTableWidget(0, 7)
         self.batch_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.batch_table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
@@ -491,7 +485,7 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
             partial_matches.sort(key=len)
             return partial_matches[0]
         return None
-
+      
     def _on_apply_batch_clicked(self):
         configs = _order_joint_configs(self._gather_batch_configs())
         if not configs:
@@ -517,7 +511,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
 
                 if joint in processed:
                     continue
-
                 joint_start = current_frame
                 try:
                     result = apply_check_motion(joint, rotate_min, rotate_max, joint_start, interval)
@@ -692,7 +685,6 @@ class CheckMotionToolDialog(QtWidgets.QDialog):
         if fallback:
             fallback.sort(key=len)
             return fallback[0]
-
         return None
 
 
