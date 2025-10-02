@@ -59,6 +59,11 @@ def _open_driven_key_matrix():
     module.show_dialog()
 
 
+def _open_check_motion_tool():
+    module = _load_module("CheckMotionTool")
+    module.show_dialog()
+
+
 class TwistChainDialog(QtWidgets.QDialog):
     def __init__(self, parent=maya_main_window()):
         super(TwistChainDialog, self).__init__(parent)
@@ -189,6 +194,11 @@ TOOL_CATEGORIES = [
                 "label": u"Driven Key Matrix",
                 "tooltip": u"選択したジョイントに設定されたドリブンキーを行列で確認・編集します。",
                 "callback": partial(_run_with_warning, _open_driven_key_matrix),
+            },
+            {
+                "label": u"Check Motion Tool",
+                "tooltip": u"指定したジョイントにチェックモーション用のキーを自動生成します。",
+                "callback": partial(_run_with_warning, _open_check_motion_tool),
             },
             {
                 "label": u"Simple Rig From Ctrl + Joints",
