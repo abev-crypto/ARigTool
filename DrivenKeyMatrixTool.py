@@ -68,6 +68,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         self.setWindowFlags(self.windowFlags() ^ QtCore.Qt.WindowContextHelpButtonHint)
 
         self._row_entries: List[DrivenKeyEntry] = []
+        self._preview_attr: Optional[str] = None
+        self._preview_original_value: Optional[float] = None
+        self._block_selection_preview = False
 
         self._create_widgets()
         self._create_layout()
@@ -89,6 +92,10 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         self.add_key_button = QtWidgets.QPushButton("Add Key")
         self.add_key_button.setToolTip(
             "指定したInput値で選択中のアトリビュートに新しいキーを追加します。"
+        )
+        self.collect_button = QtWidgets.QPushButton("Collect")
+        self.collect_button.setToolTip(
+            "選択行のOutput値を、現在のジョイントのアトリビュート値で更新します。"
         )
 
         self.auto_mirror_checkbox = QtWidgets.QCheckBox("Mirror to opposite joints automatically")
@@ -131,6 +138,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         button_layout.addWidget(self.add_input_label)
         button_layout.addWidget(self.add_input_spinbox)
         button_layout.addWidget(self.add_key_button)
+        button_layout.addWidget(self.collect_button)
         button_layout.addWidget(self.auto_mirror_checkbox)
         button_layout.addStretch(1)
         button_layout.addWidget(self.mirror_button)
@@ -143,9 +151,13 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
     def _create_connections(self) -> None:
         self.refresh_button.clicked.connect(self.refresh_from_selection)
         self.add_key_button.clicked.connect(self.add_key_for_selection)
+        self.collect_button.clicked.connect(self.collect_output_for_selection)
         self.close_button.clicked.connect(self.close)
         self.mirror_button.clicked.connect(self.apply_mirror_from_selection)
         self.table_widget.itemChanged.connect(self._on_item_changed)
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is not None:
+            selection_model.selectionChanged.connect(self._on_selection_changed)
 
     # ------------------------------------------------------------------
     # Data helpers
@@ -363,6 +375,8 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         return True
 
     def refresh_from_selection(self) -> None:
+        self._restore_input_preview()
+        self._block_selection_preview = True
         self.table_widget.blockSignals(True)
         try:
             self._row_entries = []
@@ -387,6 +401,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 self.info_label.setText("選択したジョイントにドリブンキーは見つかりませんでした。")
         finally:
             self.table_widget.blockSignals(False)
+            self._block_selection_preview = False
 
     def _append_entries(self, entries: Sequence[DrivenKeyEntry]) -> None:
         current_rows = self.table_widget.rowCount()
@@ -564,6 +579,64 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     # ------------------------------------------------------------------
     # Editing
+    def _driver_attribute_plug(self, entry: DrivenKeyEntry) -> Optional[str]:
+        if entry.driver_node and entry.driver_attribute:
+            return f"{entry.driver_node}.{entry.driver_attribute}"
+        if entry.driver_attribute:
+            return entry.driver_attribute
+        return None
+
+    def _restore_input_preview(self) -> None:
+        if self._preview_attr is None:
+            return
+        if self._preview_original_value is None:
+            self._preview_attr = None
+            return
+        try:
+            cmds.setAttr(self._preview_attr, self._preview_original_value)
+        except Exception:  # pragma: no cover - Maya依存のため
+            pass
+        finally:
+            self._preview_attr = None
+            self._preview_original_value = None
+
+    def _apply_input_preview(self, entry: DrivenKeyEntry) -> None:
+        attr_plug = self._driver_attribute_plug(entry)
+        if not attr_plug:
+            return
+        try:
+            current_value = cmds.getAttr(attr_plug)
+        except Exception:  # pragma: no cover - Maya依存のため
+            return
+
+        try:
+            cmds.setAttr(attr_plug, entry.input_value)
+        except Exception:  # pragma: no cover - Maya依存のため
+            return
+
+        self._preview_attr = attr_plug
+        self._preview_original_value = current_value
+
+    def _on_selection_changed(
+        self,
+        selected: QtCore.QItemSelection,
+        deselected: QtCore.QItemSelection,
+    ) -> None:
+        if self._block_selection_preview:
+            return
+        self._restore_input_preview()
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is None:
+            return
+        rows = [index.row() for index in selection_model.selectedRows()]
+        if not rows:
+            return
+        row = rows[-1]
+        if not (0 <= row < len(self._row_entries)):
+            return
+        entry = self._row_entries[row]
+        self._apply_input_preview(entry)
+
     def _on_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
         column = item.column()
         if column not in (self.COLUMN_INPUT, self.COLUMN_OUTPUT):
@@ -715,6 +788,61 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         else:
             self.info_label.setText("キーを追加できませんでした。")
 
+    def collect_output_for_selection(self) -> None:
+        if not self._row_entries:
+            self.info_label.setText("Collectする前にRefreshしてください。")
+            return
+
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is None:
+            self.info_label.setText("Collect対象の行を選択してください。")
+            return
+
+        rows = {index.row() for index in selection_model.selectedRows()}
+        if not rows:
+            self.info_label.setText("Collect対象の行を選択してください。")
+            return
+
+        collected = 0
+        errors: List[str] = []
+        for row in sorted(rows):
+            if not (0 <= row < len(self._row_entries)):
+                continue
+            entry = self._row_entries[row]
+            attr_plug = f"{entry.joint}.{entry.attribute}"
+            try:
+                current_value = float(cmds.getAttr(attr_plug))
+            except Exception as exc:  # pragma: no cover - Maya依存のため
+                errors.append(str(exc))
+                continue
+
+            try:
+                cmds.keyframe(
+                    entry.anim_curve,
+                    index=(entry.key_index, entry.key_index),
+                    edit=True,
+                    valueChange=current_value,
+                )
+            except Exception as exc:  # pragma: no cover - Maya依存のため
+                errors.append(str(exc))
+                continue
+
+            entry.output_value = current_value
+            collected += 1
+            if self.auto_mirror_checkbox.isChecked():
+                self._update_mirror_entry(
+                    entry, {self.COLUMN_OUTPUT: current_value}
+                )
+
+        self.refresh_from_selection()
+
+        if collected:
+            self.info_label.setText(f"{collected} 行のOutputを現在値で更新しました。")
+        elif errors:
+            self.info_label.setText(f"Collect中にエラー: {errors[0]}")
+        else:
+            self.info_label.setText("Outputを更新できませんでした。")
+
     # ------------------------------------------------------------------
     def apply_mirror_from_selection(self) -> None:
         if not self._row_entries:
@@ -751,6 +879,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             QtCore.QTimer.singleShot(0, self.refresh_from_selection)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore
+        self._restore_input_preview()
         super().closeEvent(event)
         global _dialog
         if _dialog is self:
