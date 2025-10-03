@@ -869,10 +869,19 @@ if QtWidgets is not None:
             self._create_layout()
             self._create_connections()
 
+            self._current_base_joint: Optional[str] = None
+            self._current_reverse_twist: bool = False
+            self._current_twist_axis: str = "X"
+
             self._refresh_data()
 
         def _create_widgets(self):
             self.info_label = QtWidgets.QLabel("")
+
+            self.axis_label = QtWidgets.QLabel(u"ツイスト参照軸:")
+            self.axis_combo = QtWidgets.QComboBox()
+            self.axis_combo.addItems(list(_AXES))
+            self.axis_combo.setEnabled(False)
 
             self.table = QtWidgets.QTableWidget(0, 3)
             headers = [u"Joint", u"Twist Weight", u"Scale Max"]
@@ -893,6 +902,13 @@ if QtWidgets is not None:
         def _create_layout(self):
             main_layout = QtWidgets.QVBoxLayout(self)
             main_layout.addWidget(self.info_label)
+
+            axis_layout = QtWidgets.QHBoxLayout()
+            axis_layout.addWidget(self.axis_label)
+            axis_layout.addWidget(self.axis_combo)
+            axis_layout.addStretch(1)
+            main_layout.addLayout(axis_layout)
+
             main_layout.addWidget(self.table)
 
             button_layout = QtWidgets.QHBoxLayout()
@@ -916,6 +932,7 @@ if QtWidgets is not None:
             base = sel[0]
             twist_joints = _list_twist_joints(base)
             info_message = "Base joint {0}".format(base)
+            reverse_twist = False
 
             if not twist_joints:
                 reverse_root = _find_reverse_twist_root(base)
@@ -923,17 +940,54 @@ if QtWidgets is not None:
                     twist_joints = _list_twist_joints(reverse_root)
                     if twist_joints:
                         info_message = "Base joint {0}\nReverse twist root {1}".format(base, reverse_root)
+                        reverse_twist = True
 
             if not twist_joints:
                 self._populate_table([], message="No twist joints found under the selected joint.")
                 return
 
-            self._populate_table(twist_joints, message=info_message)
+            twist_axis = _detect_twist_axis_from_joints(twist_joints)
 
-        def _populate_table(self, joints, message=""):
+            self._populate_table(
+                twist_joints,
+                message=info_message,
+                base_joint=base,
+                twist_axis=twist_axis,
+                reverse_twist=reverse_twist,
+            )
+
+        def _populate_table(
+            self,
+            joints,
+            message="",
+            *,
+            base_joint: Optional[str] = None,
+            twist_axis: Optional[str] = None,
+            reverse_twist: bool = False,
+        ):
             self.table.setRowCount(0)
             self.info_label.setText(message)
             self.table.setEnabled(bool(joints))
+
+            if joints:
+                try:
+                    normalized_axis = _normalize_twist_axis(twist_axis or "X")
+                except ValueError:
+                    normalized_axis = "X"
+                self.axis_combo.setEnabled(True)
+                index = self.axis_combo.findText(normalized_axis, QtCore.Qt.MatchFixedString)
+                if index < 0:
+                    index = 0
+                self.axis_combo.setCurrentIndex(index)
+                self._current_base_joint = base_joint
+                self._current_reverse_twist = bool(reverse_twist)
+                self._current_twist_axis = normalized_axis
+            else:
+                self.axis_combo.setEnabled(False)
+                self.axis_combo.setCurrentIndex(0)
+                self._current_base_joint = None
+                self._current_reverse_twist = False
+                self._current_twist_axis = "X"
 
             for row, joint in enumerate(joints):
                 self.table.insertRow(row)
@@ -965,7 +1019,19 @@ if QtWidgets is not None:
                 self.table.setCellWidget(row, 2, scale_spin)
 
         def _apply_changes(self):
-            for row in range(self.table.rowCount()):
+            row_count = self.table.rowCount()
+            if not self._current_base_joint or row_count <= 0:
+                return
+
+            try:
+                selected_axis = _normalize_twist_axis(self.axis_combo.currentText())
+            except ValueError:
+                selected_axis = "X"
+
+            weights: List[float] = []
+            scales: List[float] = []
+
+            for row in range(row_count):
                 item = self.table.item(row, 0)
                 if item is None:
                     continue
@@ -981,14 +1047,67 @@ if QtWidgets is not None:
                 weight_value = weight_widget.value()
                 scale_value = scale_widget.value()
 
-                try:
-                    cmds.setAttr(joint + ".twistWeight", weight_value)
-                except Exception:
-                    pass
-                try:
-                    cmds.setAttr(joint + ".twistScaleMax", scale_value)
-                except Exception:
-                    pass
+                weights.append(weight_value)
+                scales.append(scale_value)
+
+                if selected_axis == self._current_twist_axis:
+                    try:
+                        cmds.setAttr(joint + ".twistWeight", weight_value)
+                    except Exception:
+                        pass
+                    try:
+                        cmds.setAttr(joint + ".twistScaleMax", scale_value)
+                    except Exception:
+                        pass
+
+            if selected_axis == self._current_twist_axis:
+                return
+
+            base_joint = self._current_base_joint
+            count = len(weights)
+            if count <= 0:
+                return
+
+            scale_at_90 = scales[-1] if scales else 1.0
+
+            cmds.undoInfo(openChunk=True, chunkName="TwistChainEditorAxisChange")
+            try:
+                cleanup_twist_chain(base_joint)
+                new_chain = create_twist_chain_for_joint(
+                    base_joint,
+                    count=count,
+                    name_tag=None,
+                    scale_at_90=scale_at_90,
+                    reverse_twist=self._current_reverse_twist,
+                    select_result=False,
+                    allow_start_rename=False,
+                    use_undo_chunk=False,
+                    twist_axis=selected_axis,
+                )
+
+                if not new_chain:
+                    cmds.warning("Failed to rebuild twist chain for {0}.".format(base_joint))
+                    return
+
+                new_twist_joints = [
+                    j for j in new_chain if cmds.attributeQuery("twistWeight", node=j, exists=True)
+                ]
+
+                for idx, joint in enumerate(new_twist_joints):
+                    if idx >= len(weights):
+                        break
+                    try:
+                        cmds.setAttr(joint + ".twistWeight", float(weights[idx]))
+                    except Exception:
+                        pass
+                    try:
+                        cmds.setAttr(joint + ".twistScaleMax", float(scales[idx]))
+                    except Exception:
+                        pass
+            finally:
+                cmds.undoInfo(closeChunk=True)
+
+            self._refresh_data()
 
         def closeEvent(self, event):
             super(TwistChainEditorDialog, self).closeEvent(event)
