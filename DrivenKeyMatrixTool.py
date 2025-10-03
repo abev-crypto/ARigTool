@@ -130,19 +130,106 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     # ------------------------------------------------------------------
     # Data helpers
-    def _mirror_joint_name(self, joint: str) -> Optional[str]:
-        mirrored = self._mirror_path(joint)
+    def _mirror_node_name(self, name: str) -> Optional[str]:
+        mirrored = self._mirror_path(name)
         if mirrored:
             return mirrored
-        short_mirror = self._mirror_simple_name(_short_name(joint))
-        if short_mirror and "|" in joint:
-            parts = joint.split("|")
+        short_mirror = self._mirror_simple_name(_short_name(name))
+        if short_mirror and "|" in name:
+            parts = name.split("|")
             if parts:
                 parts[-1] = short_mirror
                 candidate = "|".join(parts)
-                if candidate != joint:
+                if candidate != name:
                     return candidate
         return short_mirror
+
+    def _mirror_joint_name(self, joint: str) -> Optional[str]:
+        return self._mirror_node_name(joint)
+
+    def _mirror_attribute_plug(self, plug: str) -> Optional[str]:
+        if "." not in plug:
+            return None
+        node, attr = plug.rsplit(".", 1)
+        mirror_node = self._mirror_node_name(node)
+        if not mirror_node:
+            return None
+        mirror_plug = f"{mirror_node}.{attr}"
+        if not cmds.objExists(mirror_node) or not cmds.objExists(mirror_plug):
+            return None
+        return mirror_plug
+
+    def _should_negate_attribute(self, attribute: str) -> bool:
+        if not attribute:
+            return False
+        attr_name = attribute.split(".")[-1]
+        return attr_name.lower().endswith("y")
+
+    def _duplicate_anim_curve_for_mirror(
+        self, entry: DrivenKeyEntry, mirror_joint: str
+    ) -> Optional[str]:
+        target_attr = f"{mirror_joint}.{entry.attribute}"
+        if not cmds.objExists(target_attr):
+            return None
+
+        try:
+            duplicated = cmds.duplicate(entry.anim_curve, rc=True)[0]
+        except RuntimeError:
+            try:
+                duplicated = cmds.duplicate(entry.anim_curve)[0]
+            except RuntimeError:
+                return None
+
+        try:
+            cmds.connectAttr(f"{duplicated}.output", target_attr, f=True)
+        except RuntimeError:
+            try:
+                cmds.delete(duplicated)
+            except RuntimeError:
+                pass
+            return None
+
+        driver_plugs = cmds.listConnections(
+            f"{entry.anim_curve}.input", s=True, d=False, p=True, scn=True
+        ) or []
+
+        connected_driver = False
+        for plug in driver_plugs:
+            mirror_plug = self._mirror_attribute_plug(plug)
+            if not mirror_plug:
+                continue
+            try:
+                cmds.connectAttr(mirror_plug, f"{duplicated}.input", f=True)
+                connected_driver = True
+                break
+            except RuntimeError:
+                continue
+
+        if not connected_driver:
+            for plug in driver_plugs:
+                if not cmds.objExists(plug):
+                    continue
+                try:
+                    cmds.connectAttr(plug, f"{duplicated}.input", f=True)
+                    connected_driver = True
+                    break
+                except RuntimeError:
+                    continue
+
+        if not connected_driver:
+            try:
+                cmds.delete(duplicated)
+            except RuntimeError:
+                pass
+            return None
+
+        if self._should_negate_attribute(entry.attribute):
+            try:
+                cmds.scaleKey(mirror_joint, attribute=entry.attribute, valueScale=-1)
+            except Exception:
+                pass
+
+        return duplicated
 
     def _mirror_simple_name(self, name: str) -> Optional[str]:
         if "_L" in name:
@@ -189,6 +276,10 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             return None
 
         mirror_entries = self._build_entries_for_joint(mirror_name)
+        if not mirror_entries:
+            duplicated = self._duplicate_anim_curve_for_mirror(entry, mirror_name)
+            if duplicated:
+                mirror_entries = self._build_entries_for_joint(mirror_name)
         for candidate in mirror_entries:
             if candidate.attribute != entry.attribute:
                 continue
@@ -232,7 +323,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     mirror_entry.anim_curve,
                     index=(mirror_entry.key_index, mirror_entry.key_index),
                     edit=True,
-                    float=mirrored_input,
+                    float=(mirrored_input,),
                 )
                 mirror_entry.input_value = mirrored_input
             if self.COLUMN_OUTPUT in values:
@@ -432,7 +523,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     entry.anim_curve,
                     index=(entry.key_index, entry.key_index),
                     edit=True,
-                    float=value,
+                    float=(value,),
                 )
                 entry.input_value = value
             else:
