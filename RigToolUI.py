@@ -90,6 +90,10 @@ class TwistChainDialog(QtWidgets.QDialog):
         self.scale_spin.setSingleStep(0.05)
         self.scale_spin.setValue(1.2)
 
+        self.axis_label = QtWidgets.QLabel(u"ツイスト参照軸:")
+        self.axis_combo = QtWidgets.QComboBox()
+        self.axis_combo.addItems(["X", "Y", "Z"])
+
         self.reverse_checkbox = QtWidgets.QCheckBox(u"逆ツイストを有効にする")
 
         self.create_button = QtWidgets.QPushButton(u"Create")
@@ -105,6 +109,7 @@ class TwistChainDialog(QtWidgets.QDialog):
         form_layout = QtWidgets.QFormLayout()
         form_layout.addRow(self.label, self.spin_box)
         form_layout.addRow(self.scale_label, self.scale_spin)
+        form_layout.addRow(self.axis_label, self.axis_combo)
         form_layout.addRow("", self.reverse_checkbox)
         main_layout.addLayout(form_layout)
 
@@ -118,6 +123,7 @@ class TwistChainDialog(QtWidgets.QDialog):
         count = self.spin_box.value()
         scale = self.scale_spin.value()
         reverse_enabled = self.reverse_checkbox.isChecked()
+        axis = self.axis_combo.currentText()
 
         def _callback():
             _call_module_function(
@@ -126,6 +132,7 @@ class TwistChainDialog(QtWidgets.QDialog):
                 count=count,
                 scale_at_90=scale,
                 reverse_twist=reverse_enabled,
+                twist_axis=axis,
             )
 
         _run_with_warning(_callback)

@@ -48,6 +48,14 @@ TWIST_NODE_TYPES: Set[str] = {
     "setRange",
     "condition",
 }
+_AXES: Tuple[str, ...] = ("X", "Y", "Z")
+
+
+def _normalize_twist_axis(twist_axis: str) -> str:
+    axis = (twist_axis or "X").upper()
+    if axis not in _AXES:
+        raise ValueError("Invalid twist axis: {0}".format(twist_axis))
+    return axis
 
 
 def _list_base_children(joint):
@@ -110,11 +118,37 @@ def _list_twist_children(joint):
     return result
 
 
-def _create_standard_twist_chain(start, ref, base_tag, start_short, length, base_radius, count, scale_at_90):
+def _detect_twist_axis_from_joints(twist_joints: Sequence[str]) -> str:
+    for joint in twist_joints:
+        for axis in _AXES:
+            rotate_attr = joint + ".rotate" + axis
+            connections = cmds.listConnections(rotate_attr, s=True, d=False, p=True) or []
+            for plug in connections:
+                node = plug.split(".")[0]
+                if cmds.nodeType(node) in TWIST_NODE_TYPES:
+                    return axis
+    return "X"
+
+
+def _create_standard_twist_chain(
+    start,
+    ref,
+    base_tag,
+    start_short,
+    length,
+    base_radius,
+    count,
+    scale_at_90,
+    twist_axis,
+):
+    twist_axis = _normalize_twist_axis(twist_axis)
+    rotate_attr = ".rotate" + twist_axis
+    other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
+
     pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
     cmds.setAttr(pma_sub + ".operation", 2)  # subtract
-    cmds.connectAttr(ref + ".rotateX", pma_sub + ".input1D[0]", f=True)
-    cmds.connectAttr(start + ".rotateX", pma_sub + ".input1D[1]", f=True)
+    cmds.connectAttr(ref + rotate_attr, pma_sub + ".input1D[0]", f=True)
+    cmds.connectAttr(start + rotate_attr, pma_sub + ".input1D[1]", f=True)
 
     abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
     cmds.setAttr(abs_neg + ".input2", -1)
@@ -158,7 +192,7 @@ def _create_standard_twist_chain(start, ref, base_tag, start_short, length, base
         cmds.setAttr(j + ".translateZ", 0)
         cmds.setAttr(j + ".translateX", length * ratio)
 
-        for ax in ("X", "Y", "Z"):
+        for ax in _AXES:
             try:
                 cmds.setAttr(j + ".rotate" + ax, l=False, k=True, cb=True)
             except Exception:
@@ -177,11 +211,11 @@ def _create_standard_twist_chain(start, ref, base_tag, start_short, length, base
 
         pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
         cmds.setAttr(pma_add + ".operation", 1)
-        cmds.connectAttr(start + ".rotateX", pma_add + ".input1D[0]", f=True)
+        cmds.connectAttr(start + rotate_attr, pma_add + ".input1D[0]", f=True)
         cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
 
-        cmds.connectAttr(pma_add + ".output1D", j + ".rotateX", f=True)
-        for ax in ("Y", "Z"):
+        cmds.connectAttr(pma_add + ".output1D", j + rotate_attr, f=True)
+        for ax in other_axes:
             cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
 
         ratio_attr = "twistWeight"
@@ -228,18 +262,23 @@ def _create_reverse_twist_chain(
     base_radius,
     count,
     scale_at_90,
+    twist_axis,
     start_parent=None,
 ):
+    twist_axis = _normalize_twist_axis(twist_axis)
+    rotate_attr = ".rotate" + twist_axis
+    other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
+
     abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
     cmds.setAttr(abs_neg + ".input2", -1)
-    cmds.connectAttr(start + ".rotateX", abs_neg + ".input1", f=True)
+    cmds.connectAttr(start + rotate_attr, abs_neg + ".input1", f=True)
 
     cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
     cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
     cmds.setAttr(cond_abs + ".secondTerm", 0)
-    cmds.connectAttr(start + ".rotateX", cond_abs + ".firstTerm", f=True)
+    cmds.connectAttr(start + rotate_attr, cond_abs + ".firstTerm", f=True)
     cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
-    cmds.connectAttr(start + ".rotateX", cond_abs + ".colorIfFalseR", f=True)
+    cmds.connectAttr(start + rotate_attr, cond_abs + ".colorIfFalseR", f=True)
 
     twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
     cmds.setAttr(twist_range + ".minX", 0)
@@ -277,13 +316,13 @@ def _create_reverse_twist_chain(
             pass
 
     try:
-        cmds.setAttr(root + ".rotateX", l=False, k=True, cb=True)
-        cmds.setAttr(root + ".rotateX", 0)
-        cmds.setAttr(root + ".rotateX", l=True, k=False, cb=False)
+        cmds.setAttr(root + rotate_attr, l=False, k=True, cb=True)
+        cmds.setAttr(root + rotate_attr, 0)
+        cmds.setAttr(root + rotate_attr, l=True, k=False, cb=False)
     except Exception:
         pass
 
-    for ax in ("Y", "Z"):
+    for ax in other_axes:
         try:
             cmds.setAttr(root + ".rotate" + ax, l=False, k=True, cb=True)
             cmds.connectAttr(start + ".rotate" + ax, root + ".rotate" + ax, f=True)
@@ -314,11 +353,11 @@ def _create_reverse_twist_chain(
         cmds.setAttr(j + ".translateX", length * ratio)
 
         try:
-            cmds.setAttr(j + ".rotateX", l=False, k=True, cb=True)
+            cmds.setAttr(j + rotate_attr, l=False, k=True, cb=True)
         except Exception:
             pass
 
-        for ax in ("Y", "Z"):
+        for ax in other_axes:
             try:
                 cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
             except Exception:
@@ -337,9 +376,9 @@ def _create_reverse_twist_chain(
         cmds.setAttr(j + "." + ratio_attr, ratio)
 
         md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{suffix}_MD")
-        cmds.connectAttr(start + ".rotateX", md + ".input1", f=True)
+        cmds.connectAttr(start + rotate_attr, md + ".input1", f=True)
         cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
-        cmds.connectAttr(md + ".output", j + ".rotateX", f=True)
+        cmds.connectAttr(md + ".output", j + rotate_attr, f=True)
 
         scale_factor = float(idx)
         scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
@@ -379,7 +418,10 @@ def _create_twist_chain_internal(
     reverse_twist: bool = False,
     manage_display_layer: bool = True,
     allow_start_rename: bool = True,
+    twist_axis: str = "X",
 ) -> List[str]:
+    twist_axis = _normalize_twist_axis(twist_axis)
+
     if not cmds.objExists(start):
         cmds.warning("Start joint {0} does not exist; skipping.".format(start))
         return []
@@ -432,6 +474,7 @@ def _create_twist_chain_internal(
             base_radius=base_radius,
             count=count,
             scale_at_90=scale_at_90,
+            twist_axis=twist_axis,
             start_parent=start_parent,
         )
     else:
@@ -444,6 +487,7 @@ def _create_twist_chain_internal(
             base_radius=base_radius,
             count=count,
             scale_at_90=scale_at_90,
+            twist_axis=twist_axis,
         )
 
     if manage_display_layer and created:
@@ -478,7 +522,13 @@ def _create_twist_chain_internal(
     return created or []
 
 
-def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist=False):
+def create_twist_chain(
+    count=4,
+    name_tag="Twist",
+    scale_at_90=1.2,
+    reverse_twist=False,
+    twist_axis="X",
+):
     sel = cmds.ls(sl=True, type="joint") or []
     if not sel:
         cmds.error("Select at least one joint.")
@@ -494,6 +544,7 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
             scale_at_90=scale_at_90,
             reverse_twist=reverse_twist,
             allow_start_rename=True,
+            twist_axis=twist_axis,
         )
     finally:
         cmds.undoInfo(closeChunk=True)
@@ -513,6 +564,7 @@ def create_twist_chain_for_joint(
     select_result: bool = False,
     allow_start_rename: bool = False,
     use_undo_chunk: bool = True,
+    twist_axis: str = "X",
 ) -> List[str]:
     if use_undo_chunk:
         cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
@@ -524,6 +576,7 @@ def create_twist_chain_for_joint(
             scale_at_90=scale_at_90,
             reverse_twist=reverse_twist,
             allow_start_rename=allow_start_rename,
+            twist_axis=twist_axis,
         )
     finally:
         if use_undo_chunk:
@@ -567,6 +620,7 @@ def collect_twist_chain_data(start: str) -> Optional[Dict[str, object]]:
         driven[joint] = _list_driven_attributes(joint)
 
     joint_count = len(twist_joints)
+    twist_axis = _detect_twist_axis_from_joints(twist_joints)
 
     return {
         "start": start,
@@ -579,6 +633,7 @@ def collect_twist_chain_data(start: str) -> Optional[Dict[str, object]]:
         "reverse_twist": bool(reverse_root),
         "reverse_root": reverse_root,
         "reverse_root_driven": _list_driven_attributes(reverse_root) if reverse_root else [],
+        "twist_axis": twist_axis,
     }
 
 
@@ -592,7 +647,7 @@ def cleanup_twist_chain(start: str) -> None:
     to_visit: List[str] = list(twist_joints)
     while to_visit:
         node = to_visit.pop()
-        for attr in (".rotateX", ".scaleY", ".scaleZ"):
+        for attr in (".rotateX", ".rotateY", ".rotateZ", ".scaleY", ".scaleZ"):
             plugs = cmds.listConnections(node + attr, s=True, d=False, p=True) or []
             for plug in plugs:
                 src_node = plug.split(".")[0]
@@ -646,6 +701,7 @@ def build_twist_chain_from_data(
     scale_at_90 = scales[-1] if scales else 1.0
     twist_count = int(data.get("count", joint_count))
     reverse_twist = bool(data.get("reverse_twist", False))
+    twist_axis = data.get("twist_axis", "X")
 
     created_chain = create_twist_chain_for_joint(
         target_start,
@@ -655,6 +711,7 @@ def build_twist_chain_from_data(
         reverse_twist=reverse_twist,
         select_result=False,
         allow_start_rename=allow_start_rename,
+        twist_axis=twist_axis,
     )
     if not created_chain:
         return []
