@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide2 import QtCore, QtGui, QtWidgets
 import maya.cmds as cmds
@@ -51,12 +51,14 @@ class DrivenKeyEntry:
     input_value: float
     output_value: float
     driver_attribute: str = ""
+    driver_node: str = ""
 
 
 class DrivenKeyMatrixDialog(QtWidgets.QDialog):
-    COLUMN_ATTRIBUTE = 0
-    COLUMN_INPUT = 1
-    COLUMN_OUTPUT = 2
+    COLUMN_DRIVER = 0
+    COLUMN_ATTRIBUTE = 1
+    COLUMN_INPUT = 2
+    COLUMN_OUTPUT = 3
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent or maya_main_window())
@@ -71,7 +73,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         self._create_layout()
         self._create_connections()
 
-        self.resize(520, 420)
+        self.resize(420, 380)
 
     # ------------------------------------------------------------------
     # UI setup
@@ -99,13 +101,16 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             "選択した行(未選択の場合は全て)の値をミラー側のジョイントに反映します。"
         )
 
-        self.table_widget = QtWidgets.QTableWidget(0, 3)
+        self.table_widget = QtWidgets.QTableWidget(0, 4)
         self.table_widget.setAlternatingRowColors(True)
-        self.table_widget.setHorizontalHeaderLabels(["Attr", "Input", "Output"])
-        self.table_widget.horizontalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.Stretch
-        )
-        self.table_widget.verticalHeader().setMinimumWidth(140)
+        self.table_widget.setHorizontalHeaderLabels(["Driver", "Attr", "Input", "Output"])
+        header = self.table_widget.horizontalHeader()
+        header.setSectionResizeMode(self.COLUMN_DRIVER, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self.COLUMN_ATTRIBUTE, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self.COLUMN_INPUT, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(self.COLUMN_OUTPUT, QtWidgets.QHeaderView.Stretch)
+        header.setStretchLastSection(False)
+        self.table_widget.verticalHeader().setMinimumWidth(110)
         self.table_widget.verticalHeader().setDefaultAlignment(
             QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft
         )
@@ -391,7 +396,22 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             row = current_rows + offset
             self._row_entries.append(entry)
 
-            attr_item = QtWidgets.QTableWidgetItem(self._attribute_short_name(entry.attribute))
+            previous_entry = self._row_entries[row - 1] if row > 0 else None
+
+            driver_text = self._driver_display_text(entry)
+            if self._is_same_driver_group(entry, previous_entry):
+                driver_text = ""
+            driver_item = QtWidgets.QTableWidgetItem(driver_text)
+            driver_item.setFlags(driver_item.flags() & ~QtCore.Qt.ItemIsEditable)
+            driver_tooltip = self._driver_tooltip(entry)
+            if driver_tooltip:
+                driver_item.setToolTip(driver_tooltip)
+            self.table_widget.setItem(row, self.COLUMN_DRIVER, driver_item)
+
+            attr_text = self._attribute_short_name(entry.attribute)
+            if self._is_same_attribute_group(entry, previous_entry):
+                attr_text = ""
+            attr_item = QtWidgets.QTableWidgetItem(attr_text)
             attr_item.setFlags(attr_item.flags() & ~QtCore.Qt.ItemIsEditable)
             attr_item.setToolTip(entry.attribute)
             self.table_widget.setItem(row, self.COLUMN_ATTRIBUTE, attr_item)
@@ -438,7 +458,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 continue
 
             attribute = self._anim_curve_attribute(joint_name, anim_curve)
-            driver_attribute = self._anim_curve_driver_attribute(anim_curve)
+            driver_node, driver_attribute = self._anim_curve_driver_info(anim_curve)
             for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
                 entries.append(
                     DrivenKeyEntry(
@@ -449,6 +469,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                         input_value=float(input_value),
                         output_value=float(output_value),
                         driver_attribute=driver_attribute,
+                        driver_node=driver_node,
                     )
                 )
         return entries
@@ -480,16 +501,17 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             return fallback_attr
         return _short_name(anim_curve)
 
-    def _anim_curve_driver_attribute(self, anim_curve: str) -> str:
+    def _anim_curve_driver_info(self, anim_curve: str) -> Tuple[str, str]:
         inputs = cmds.listConnections(
             f"{anim_curve}.input", plugs=True, s=True, d=False
         ) or []
         for plug in inputs:
             if "." not in plug:
                 continue
-            _, attr = plug.split(".", 1)
-            return attr
-        return ""
+            node, attr = plug.split(".", 1)
+            node_long = cmds.ls(node, l=True) or [node]
+            return node_long[0], attr
+        return "", ""
 
     def _attribute_from_curve_name(self, anim_curve: str) -> str:
         short_name = _short_name(anim_curve)
@@ -507,6 +529,38 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 axis = attribute[len(prefix) :].upper()
                 return f"{short}{axis}"
         return attribute
+
+    def _driver_display_text(self, entry: DrivenKeyEntry) -> str:
+        if entry.driver_node and entry.driver_attribute:
+            return f"{_short_name(entry.driver_node)}.{entry.driver_attribute}"
+        if entry.driver_node:
+            return _short_name(entry.driver_node)
+        return entry.driver_attribute
+
+    def _driver_tooltip(self, entry: DrivenKeyEntry) -> str:
+        if entry.driver_node and entry.driver_attribute:
+            return f"{entry.driver_node}.{entry.driver_attribute}"
+        if entry.driver_attribute:
+            return entry.driver_attribute
+        return entry.driver_node
+
+    def _is_same_driver_group(
+        self, entry: DrivenKeyEntry, previous: Optional[DrivenKeyEntry]
+    ) -> bool:
+        if previous is None:
+            return False
+        return (
+            previous.joint == entry.joint
+            and previous.driver_node == entry.driver_node
+            and previous.driver_attribute == entry.driver_attribute
+        )
+
+    def _is_same_attribute_group(
+        self, entry: DrivenKeyEntry, previous: Optional[DrivenKeyEntry]
+    ) -> bool:
+        if previous is None:
+            return False
+        return previous.joint == entry.joint and previous.attribute == entry.attribute
 
     # ------------------------------------------------------------------
     # Editing
