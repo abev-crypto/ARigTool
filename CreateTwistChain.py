@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 try:
     from PySide2 import QtCore, QtWidgets
     from shiboken2 import wrapInstance
     import maya.OpenMayaUI as omui
-except Exception:  # pragma: no cover - Maya環境外ではUI関連モジュールが利用できない場合がある
+except Exception:  # pragma: no cover - Maya環墁EではUI関連モジュールが利用できなぁE合がある
     QtCore = QtWidgets = omui = wrapInstance = None
 
 
 def _maya_main_window():
     if omui is None:
-        raise RuntimeError("Maya UI modules are not available.")
+        raise RuntimeError("Unable to obtain Maya main window.")
     ptr = omui.MQtUtil.mainWindow()
     if ptr is None:
-        raise RuntimeError("Mayaのメインウィンドウが取得できませんでした。")
+        raise RuntimeError("Unable to obtain Maya main window.")
     return wrapInstance(int(ptr), QtWidgets.QWidget)
 
 
@@ -31,6 +32,22 @@ def _is_support_joint(joint):
     short_name = joint.split("|")[-1]
     lowered = short_name.lower()
     return "_sup" in lowered
+
+
+TWIST_LAYER = "twist_jnt"
+ANIM_CURVE_TYPES: Sequence[str] = (
+    "animCurveUL",
+    "animCurveUA",
+    "animCurveUT",
+    "animCurveUU",
+)
+TWIST_NODE_TYPES: Set[str] = {
+    "plusMinusAverage",
+    "multDoubleLinear",
+    "addDoubleLinear",
+    "setRange",
+    "condition",
+}
 
 
 def _list_base_children(joint):
@@ -51,6 +68,46 @@ def _list_base_children(joint):
             continue
         bases.append(child)
     return bases
+
+
+def _list_connected_anim_curves(target, **kwargs):
+    connections = cmds.listConnections(target, **kwargs) or []
+    result = []
+    for connection in connections:
+        node = connection.split(".")[0] if isinstance(connection, str) else connection
+        if cmds.nodeType(node) in ANIM_CURVE_TYPES:
+            result.append(connection)
+    return result
+
+
+def _list_driven_attributes(node):
+    anim_curves = _list_connected_anim_curves(node, s=True, d=False) or []
+    attrs: List[str] = []
+    for curve in anim_curves:
+        outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True) or []
+        for plug in outputs:
+            attrs.append(plug.split(".", 1)[1])
+    return sorted(set(attrs))
+
+
+def _list_twist_children(joint):
+    result = []
+    children = cmds.listRelatives(joint, c=True, type="joint") or []
+    for child in children:
+        if cmds.attributeQuery("twistWeight", node=child, exists=True):
+            result.append(child)
+    if result:
+        return result
+
+    reverse_root = _find_reverse_twist_root(joint)
+    if not reverse_root:
+        return result
+
+    children = cmds.listRelatives(reverse_root, c=True, type="joint") or []
+    for child in children:
+        if cmds.attributeQuery("twistWeight", node=child, exists=True):
+            result.append(child)
+    return result
 
 
 def _create_standard_twist_chain(start, ref, base_tag, start_short, length, base_radius, count, scale_at_90):
@@ -313,29 +370,36 @@ def _create_reverse_twist_chain(
     return created
 
 
-def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist=False):
-    sel = cmds.ls(sl=True, type="joint") or []
-    if not sel:
-        cmds.error(u"開始ジョイントを1つ選択してください。")
-
-    start = sel[0]
+def _create_twist_chain_internal(
+    start: str,
+    *,
+    count: int = 4,
+    name_tag: Optional[str] = None,
+    scale_at_90: float = 1.2,
+    reverse_twist: bool = False,
+    manage_display_layer: bool = True,
+    allow_start_rename: bool = True,
+) -> List[str]:
+    if not cmds.objExists(start):
+        cmds.warning("Start joint {0} does not exist; skipping.".format(start))
+        return []
 
     existing_twists = _list_twist_joints(start)
     if existing_twists:
         reverse_root = _find_reverse_twist_root(start)
         if reverse_root:
-            message = u"{0} には既に逆ツイストチェーンが存在するため、処理をスキップします。".format(start)
+            message = "{0} already has a reverse twist chain; skipping.".format(start)
         else:
-            message = u"{0} 直下には既にツイストジョイントが存在するため、処理をスキップします。".format(start)
+            message = "Twist joints already exist under {0}; skipping.".format(start)
         cmds.warning(message)
         return []
 
     base_candidates = _list_base_children(start)
     if not base_candidates:
-        cmds.warning(u"{0} 直下にツイストの基礎となるジョイントが見つからないため、処理をスキップします。".format(start))
+        cmds.warning("No base joint found under {0}; skipping twist creation.".format(start))
         return []
     if len(base_candidates) > 1:
-        cmds.warning(u"{0} 直下に複数の基礎ジョイントが存在するため、ツイストチェーンの作成をスキップします。".format(start))
+        cmds.warning("Multiple base joints found under {0}; skipping twist creation.".format(start))
         return []
 
     ref = base_candidates[0]
@@ -347,7 +411,7 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
     p_ref = cmds.xform(ref, q=True, ws=True, t=True)
     length = ((p_ref[0] - p_start[0]) ** 2 + (p_ref[1] - p_start[1]) ** 2 + (p_ref[2] - p_start[2]) ** 2) ** 0.5
     if length < 1e-5:
-        cmds.error(u"開始ジョイントと参照ジョイントの位置が同一です。")
+        cmds.error("Start and reference joints share the same position.")
 
     base_radius = 1.0
     if cmds.attributeQuery("radius", node=start, exists=True):
@@ -382,29 +446,26 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
             scale_at_90=scale_at_90,
         )
 
-    layer_name = "twist_jnt"
-    if cmds.objExists(layer_name):
-        if cmds.nodeType(layer_name) != "displayLayer":
-            cmds.error(u"'{0}' は displayLayer ではありません。".format(layer_name))
-        layer = layer_name
-    else:
-        layer = cmds.createDisplayLayer(name=layer_name, empty=True, nr=True)
+    if manage_display_layer and created:
+        layer_name = TWIST_LAYER
+        if cmds.objExists(layer_name):
+            if cmds.nodeType(layer_name) != "displayLayer":
+                cmds.error("'{0}' is not a displayLayer.".format(layer_name))
+            layer = layer_name
+        else:
+            layer = cmds.createDisplayLayer(name=layer_name, empty=True, nr=True)
+        try:
+            cmds.editDisplayLayerMembers(layer, created, nr=True)
+        except Exception:
+            pass
 
-    try:
-        cmds.editDisplayLayerMembers(layer, created, nr=True)
-    except Exception:
-        pass
-
-    cmds.select(created, r=True)
-    print(u"[Twist] 作成:", created)
-
-    if reverse_twist:
+    if reverse_twist and allow_start_rename and created:
         start_short_name = start.split("|")[-1]
         if not start_short_name.endswith("_D"):
             new_short_name = start_short_name + "_D"
             if cmds.objExists(new_short_name):
                 cmds.warning(
-                    u"{0} に '_D' を付加した名前 {1} は既に存在するため、リネームをスキップします。".format(
+                    "{0} + '_D' conflicts with existing name {1}; skipping.".format(
                         start_short_name, new_short_name
                     )
                 )
@@ -412,11 +473,250 @@ def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist
                 try:
                     cmds.rename(start, new_short_name)
                 except RuntimeError as exc:
-                    cmds.warning(
-                        u"{0} のリネームに失敗しました: {1}".format(start_short_name, exc)
-                    )
+                    cmds.warning("Failed to rename {0}: {1}".format(start_short_name, exc))
 
+    return created or []
+
+
+def create_twist_chain(count=4, name_tag="Twist", scale_at_90=1.2, reverse_twist=False):
+    sel = cmds.ls(sl=True, type="joint") or []
+    if not sel:
+        cmds.error("Select at least one joint.")
+
+    start = sel[0]
+
+    cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
+    try:
+        created = _create_twist_chain_internal(
+            start,
+            count=count,
+            name_tag=name_tag,
+            scale_at_90=scale_at_90,
+            reverse_twist=reverse_twist,
+            allow_start_rename=True,
+        )
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+    if created:
+        cmds.select(created, r=True)
+        print("[Twist] created:", created)
     return created
+
+def create_twist_chain_for_joint(
+    start: str,
+    *,
+    count: int = 4,
+    name_tag: Optional[str] = None,
+    scale_at_90: float = 1.2,
+    reverse_twist: bool = False,
+    select_result: bool = False,
+    allow_start_rename: bool = False,
+    use_undo_chunk: bool = True,
+) -> List[str]:
+    if use_undo_chunk:
+        cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
+    try:
+        created = _create_twist_chain_internal(
+            start,
+            count=count,
+            name_tag=name_tag,
+            scale_at_90=scale_at_90,
+            reverse_twist=reverse_twist,
+            allow_start_rename=allow_start_rename,
+        )
+    finally:
+        if use_undo_chunk:
+            cmds.undoInfo(closeChunk=True)
+    if select_result and created:
+        cmds.select(created, r=True)
+    return created
+
+def collect_twist_chain_data(start: str) -> Optional[Dict[str, object]]:
+    if not cmds.objExists(start):
+        return None
+
+    reverse_root = _find_reverse_twist_root(start)
+    twist_parent = reverse_root if reverse_root else start
+
+    children = cmds.listRelatives(twist_parent, c=True, type="joint") or []
+    twist_joints = [child for child in children if cmds.attributeQuery("twistWeight", node=child, exists=True)]
+    if not twist_joints:
+        return None
+
+    try:
+        twist_joints.sort(key=lambda x: cmds.getAttr(x + ".twistWeight"))
+    except Exception:
+        twist_joints.sort()
+
+    weights: List[float] = []
+    scales: List[float] = []
+    driven: Dict[str, Sequence[str]] = {}
+    for joint in twist_joints:
+        try:
+            weights.append(cmds.getAttr(joint + ".twistWeight"))
+        except Exception:
+            weights.append(0.0)
+        if cmds.attributeQuery("twistScaleMax", node=joint, exists=True):
+            try:
+                scales.append(cmds.getAttr(joint + ".twistScaleMax"))
+            except Exception:
+                scales.append(1.0)
+        else:
+            scales.append(1.0)
+        driven[joint] = _list_driven_attributes(joint)
+
+    joint_count = len(twist_joints)
+
+    return {
+        "start": start,
+        "weights": weights,
+        "scales": scales,
+        "count": joint_count,
+        "joint_count": joint_count,
+        "joints": list(twist_joints),
+        "driven": driven,
+        "reverse_twist": bool(reverse_root),
+        "reverse_root": reverse_root,
+        "reverse_root_driven": _list_driven_attributes(reverse_root) if reverse_root else [],
+    }
+
+
+def cleanup_twist_chain(start: str) -> None:
+    twist_joints = _list_twist_children(start)
+    reverse_root = _find_reverse_twist_root(start)
+    if not twist_joints and not reverse_root:
+        return
+
+    nodes_to_delete: Set[str] = set()
+    to_visit: List[str] = list(twist_joints)
+    while to_visit:
+        node = to_visit.pop()
+        for attr in (".rotateX", ".scaleY", ".scaleZ"):
+            plugs = cmds.listConnections(node + attr, s=True, d=False, p=True) or []
+            for plug in plugs:
+                src_node = plug.split(".")[0]
+                if src_node == start:
+                    continue
+                if cmds.nodeType(src_node) in TWIST_NODE_TYPES and src_node not in nodes_to_delete:
+                    nodes_to_delete.add(src_node)
+                    upstream = cmds.listConnections(src_node, s=True, d=False) or []
+                    for up in upstream:
+                        if cmds.nodeType(up) in TWIST_NODE_TYPES and up not in nodes_to_delete:
+                            to_visit.append(up)
+    if nodes_to_delete:
+        cmds.delete(list(nodes_to_delete))
+
+    delete_targets = list(twist_joints)
+    if reverse_root and cmds.objExists(reverse_root):
+        delete_targets.append(reverse_root)
+
+    if delete_targets:
+        cmds.delete(delete_targets)
+
+
+def build_twist_chain_from_data(
+    target_start: str,
+    data: Dict[str, object],
+    *,
+    copy_driven_callback: Optional[Callable[[str, str, Sequence[str]], None]] = None,
+    select_result: bool = False,
+    allow_start_rename: bool = False,
+    show_message: bool = False,
+) -> List[str]:
+    if not cmds.objExists(target_start):
+        cmds.warning("Target joint {0} does not exist.".format(target_start))
+        return []
+
+    joint_count = int(data.get("joint_count", 0))
+    if joint_count <= 0:
+        return []
+
+    base_candidates = _list_base_children(target_start)
+    if not base_candidates:
+        cmds.warning("No base joint found under {0}; skipping twist mirror.".format(target_start))
+        return []
+    if len(base_candidates) > 1:
+        cmds.warning("Multiple base joints found under {0}; skipping twist mirror.".format(target_start))
+        return []
+
+    cleanup_twist_chain(target_start)
+
+    scales: Sequence[float] = data.get("scales") or []
+    scale_at_90 = scales[-1] if scales else 1.0
+    twist_count = int(data.get("count", joint_count))
+    reverse_twist = bool(data.get("reverse_twist", False))
+
+    created_chain = create_twist_chain_for_joint(
+        target_start,
+        count=twist_count,
+        name_tag=None,
+        scale_at_90=scale_at_90,
+        reverse_twist=reverse_twist,
+        select_result=False,
+        allow_start_rename=allow_start_rename,
+    )
+    if not created_chain:
+        return []
+
+    twist_targets = list(created_chain)
+    root_joint = None
+    if reverse_twist:
+        if twist_targets:
+            root_joint = twist_targets.pop(0)
+        else:
+            twist_targets = []
+
+    twist_targets = twist_targets[:joint_count]
+
+    weights: Sequence[float] = data.get("weights") or []
+    source_joints: Sequence[str] = data.get("joints") or []
+    driven_map: Dict[str, Sequence[str]] = data.get("driven") or {}
+
+    for idx, joint in enumerate(twist_targets):
+        weight = weights[idx] if idx < len(weights) else 0.0
+        scale_max = scales[idx] if idx < len(scales) else 1.0
+        if cmds.attributeQuery("twistWeight", node=joint, exists=True):
+            try:
+                cmds.setAttr(joint + ".twistWeight", float(weight))
+            except Exception:
+                pass
+        if cmds.attributeQuery("twistScaleMax", node=joint, exists=True):
+            try:
+                cmds.setAttr(joint + ".twistScaleMax", float(scale_max))
+            except Exception:
+                pass
+
+        if idx < len(source_joints) and copy_driven_callback:
+            src_joint = source_joints[idx]
+            attrs = driven_map.get(src_joint) or []
+            if attrs:
+                copy_driven_callback(src_joint, joint, attrs)
+
+    if root_joint and copy_driven_callback:
+        source_root = data.get("reverse_root")
+        root_attrs = data.get("reverse_root_driven") or []
+        if source_root and root_attrs:
+            copy_driven_callback(source_root, root_joint, root_attrs)
+
+    final_chain: List[str] = []
+    if root_joint:
+        final_chain.append(root_joint)
+    final_chain.extend(twist_targets)
+    if not final_chain:
+        final_chain = list(created_chain)
+
+    if select_result and final_chain:
+        cmds.select(final_chain, add=True)
+
+    if show_message and final_chain:
+        cmds.inViewMessage(
+            amg="<hl>Twist Mirror Created</hl><br>{0}".format("\n".join(final_chain)),
+            pos="topCenter",
+            fade=True,
+        )
+
+    return final_chain
 
 
 def _list_twist_joints(base_joint):
@@ -553,22 +853,22 @@ if QtWidgets is not None:
         def _refresh_data(self):
             sel = cmds.ls(sl=True, type="joint") or []
             if not sel:
-                self._populate_table([], message=u"編集対象のジョイントを選択してください。")
+                self._populate_table([], message="Select a joint to edit.")
                 return
 
             base = sel[0]
             twist_joints = _list_twist_joints(base)
-            info_message = u"ベースジョイント: {0}".format(base)
+            info_message = "Base joint {0}".format(base)
 
             if not twist_joints:
                 reverse_root = _find_reverse_twist_root(base)
                 if reverse_root:
                     twist_joints = _list_twist_joints(reverse_root)
                     if twist_joints:
-                        info_message = u"ベースジョイント: {0}\n逆ツイストルート: {1}".format(base, reverse_root)
+                        info_message = "Base joint {0}\nReverse twist root {1}".format(base, reverse_root)
 
             if not twist_joints:
-                self._populate_table([], message=u"選択したジョイント直下にツイストジョイントが見つかりません。")
+                self._populate_table([], message="No twist joints found under the selected joint.")
                 return
 
             self._populate_table(twist_joints, message=info_message)

@@ -8,11 +8,15 @@ driven keys—on the opposite side.
 """
 import maya.cmds as cmds
 
-from CreateHalfRotJoint import create_half_rotation_joint
-from CreateTwistChain import create_twist_chain
+from CreateHalfRotJoint import (
+    build_half_chain_from_data,
+    collect_half_joint_data,
+)
+from CreateTwistChain import (
+    build_twist_chain_from_data,
+    collect_twist_chain_data,
+)
 
-TWIST_LAYER = "twist_jnt"
-HALF_LAYER = "halfrot_jnt"
 SUPPORT_LAYER = "support_jnt"
 ANIM_CURVE_TYPES = (
     "animCurveUL",
@@ -20,13 +24,6 @@ ANIM_CURVE_TYPES = (
     "animCurveUT",
     "animCurveUU",
 )
-TWIST_NODE_TYPES = {
-    "plusMinusAverage",
-    "multDoubleLinear",
-    "addDoubleLinear",
-    "setRange",
-    "condition",
-}
 def _should_negate_attr(attr):
     """Return True when mirrored driven keys should invert the value scale."""
 
@@ -107,6 +104,12 @@ def _mirror_path(path):
     return prefix + "|".join(mirrored)
 
 
+def _mirror_position(position):
+    if not position or len(position) != 3:
+        return position
+    return [-position[0], position[1], position[2]]
+
+
 def _find_joint_by_short_name(base_joint, short_name):
     parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
     search_candidates = []
@@ -158,54 +161,12 @@ def _find_reverse_twist_root(start):
     return _find_joint_by_short_name(start, target_short)
 
 
-def _list_twist_children(joint):
-    result = []
-    children = cmds.listRelatives(joint, c=True, type="joint") or []
-    for child in children:
-        if cmds.attributeQuery("twistWeight", node=child, exists=True):
-            result.append(child)
-    if result:
-        return result
 
-    reverse_root = _find_reverse_twist_root(joint)
-    if not reverse_root:
-        return result
-
-    children = cmds.listRelatives(reverse_root, c=True, type="joint") or []
-    for child in children:
-        if cmds.attributeQuery("twistWeight", node=child, exists=True):
-            result.append(child)
-    return result
-
-
-def _is_half_joint(joint):
-    short_name = joint.split("|")[-1]
-    lowered = short_name.lower()
-    return "_half" in lowered
 
 def _is_half_support_joint(joint):
     short_name = joint.split("|")[-1]
     lowered = short_name.lower()
     return "_sup" in lowered
-
-def _list_base_children(joint):
-    children = cmds.listRelatives(joint, c=True, type="joint") or []
-    bases = []
-    for child in children:
-        if _is_half_joint(child):
-            continue
-        if _is_half_support_joint(child):
-            continue
-        short_name = child.split("|")[-1]
-        lowered = short_name.lower()
-        if "twistroot" in lowered:
-            continue
-        if "twist" in lowered:
-            continue
-        if cmds.attributeQuery("twistWeight", node=child, exists=True):
-            continue
-        bases.append(child)
-    return bases
 
 
 def _list_connected_anim_curves(target, **kwargs):
@@ -228,241 +189,10 @@ def _list_driven_attributes(node):
     return sorted(set(attrs))
 
 
-def _collect_twist_data(start):
-    reverse_root = _find_reverse_twist_root(start)
-    twist_parent = reverse_root if reverse_root else start
-
-    children = cmds.listRelatives(twist_parent, c=True, type="joint") or []
-    twist_joints = [child for child in children if cmds.attributeQuery("twistWeight", node=child, exists=True)]
-    if not twist_joints:
-        return None
-
-    try:
-        twist_joints.sort(key=lambda x: cmds.getAttr(x + ".twistWeight"))
-    except Exception:
-        twist_joints.sort()
-
-    weights = []
-    scales = []
-    driven = {}
-    for j in twist_joints:
-        try:
-            weights.append(cmds.getAttr(j + ".twistWeight"))
-        except Exception:
-            weights.append(0.0)
-        if cmds.attributeQuery("twistScaleMax", node=j, exists=True):
-            try:
-                scales.append(cmds.getAttr(j + ".twistScaleMax"))
-            except Exception:
-                scales.append(1.0)
-        else:
-            scales.append(1.0)
-        driven[j] = _list_driven_attributes(j)
-
-    joint_count = len(twist_joints)
-
-    return {
-        "start": start,
-        "weights": weights,
-        "scales": scales,
-        "count": joint_count,
-        "joint_count": joint_count,
-        "joints": twist_joints,
-        "driven": driven,
-        "reverse_twist": bool(reverse_root),
-        "reverse_root": reverse_root,
-        "reverse_root_driven": _list_driven_attributes(reverse_root) if reverse_root else [],
-    }
 
 
-def _cleanup_twist(mirror_start):
-    twist_joints = _list_twist_children(mirror_start)
-    reverse_root = _find_reverse_twist_root(mirror_start)
-    if not twist_joints and not reverse_root:
-        return
-
-    nodes_to_delete = set()
-    to_visit = list(twist_joints)
-    while to_visit:
-        node = to_visit.pop()
-        for attr in (".rotateX", ".scaleY", ".scaleZ"):
-            plugs = cmds.listConnections(node + attr, s=True, d=False, p=True) or []
-            for plug in plugs:
-                src_node = plug.split(".")[0]
-                if src_node == mirror_start:
-                    continue
-                if cmds.nodeType(src_node) in TWIST_NODE_TYPES and src_node not in nodes_to_delete:
-                    nodes_to_delete.add(src_node)
-                    upstream = cmds.listConnections(src_node, s=True, d=False) or []
-                    for up in upstream:
-                        if cmds.nodeType(up) in TWIST_NODE_TYPES and up not in nodes_to_delete:
-                            to_visit.append(up)
-    if nodes_to_delete:
-        cmds.delete(list(nodes_to_delete))
-
-    delete_targets = list(twist_joints)
-    if reverse_root and cmds.objExists(reverse_root):
-        delete_targets.append(reverse_root)
-
-    if delete_targets:
-        cmds.delete(delete_targets)
 
 
-def _build_twist_chain(data, mirror_start):
-    if not cmds.objExists(mirror_start):
-        cmds.warning(u"ミラー先ジョイント {0} が存在しません。".format(mirror_start))
-        return
-
-    joint_count = data.get("joint_count", 0)
-    if joint_count <= 0:
-        return
-
-    base_candidates = _list_base_children(mirror_start)
-    if not base_candidates:
-        cmds.warning(u"{0} 直下にツイストの基礎となるジョイントが見つからないため、作成をスキップします。".format(mirror_start))
-        return
-    if len(base_candidates) > 1:
-        cmds.warning(u"{0} 直下に複数の基礎ジョイントが存在するため、ツイストチェーンのミラー作成をスキップします。".format(mirror_start))
-        return
-
-    _cleanup_twist(mirror_start)
-
-    prev_sel = cmds.ls(sl=True)
-    scale_at_90 = data["scales"][-1] if data["scales"] else 1.0
-    created_chain = []
-    try:
-        cmds.select([mirror_start], r=True)
-        twist_count = data.get("count", joint_count)
-        created_chain = create_twist_chain(
-            count=twist_count,
-            scale_at_90=scale_at_90,
-            reverse_twist=data.get("reverse_twist", False),
-        )
-    finally:
-        if prev_sel:
-            cmds.select(prev_sel, r=True)
-        else:
-            cmds.select(clear=True)
-
-    if not created_chain:
-        return
-
-    root_joint = None
-    twist_targets = list(created_chain)
-    if data.get("reverse_twist"):
-        if twist_targets:
-            root_joint = twist_targets.pop(0)
-        else:
-            twist_targets = []
-
-    twist_targets = twist_targets[:joint_count]
-
-    for idx, joint in enumerate(twist_targets):
-        if idx >= len(data["weights"]):
-            break
-        weight = data["weights"][idx]
-        scale_max = data["scales"][idx]
-        src_joint = data["joints"][idx] if idx < len(data["joints"]) else None
-        if cmds.attributeQuery("twistWeight", node=joint, exists=True):
-            try:
-                cmds.setAttr(joint + ".twistWeight", weight)
-            except Exception:
-                pass
-        if cmds.attributeQuery("twistScaleMax", node=joint, exists=True):
-            try:
-                cmds.setAttr(joint + ".twistScaleMax", scale_max)
-            except Exception:
-                pass
-        if src_joint:
-            attrs = data["driven"].get(src_joint, [])
-            _copy_driven_keys(src_joint, joint, attrs)
-
-    if root_joint:
-        source_root = data.get("reverse_root")
-        root_attrs = data.get("reverse_root_driven") or []
-        if source_root and root_attrs:
-            _copy_driven_keys(source_root, root_joint, root_attrs)
-
-    layer = _ensure_display_layer(TWIST_LAYER)
-    final_chain = []
-    if root_joint:
-        final_chain.append(root_joint)
-    final_chain.extend(twist_targets)
-    if not final_chain:
-        final_chain = created_chain
-    try:
-        cmds.editDisplayLayerMembers(layer, final_chain, nr=True)
-    except Exception:
-        pass
-    cmds.select(final_chain, add=True)
-    cmds.inViewMessage(
-        amg=u"<hl>Twist ミラー作成</hl><br>%s" % "\n".join(final_chain),
-        pos="topCenter",
-        fade=True,
-    )
-
-
-def _list_half_at_same_level(start):
-    start_short = start.split("|")[-1]
-    half_joints = []
-    candidates = set(cmds.listRelatives(start, c=True, type="joint") or [])
-    parent = cmds.listRelatives(start, p=True) or []
-    if parent:
-        siblings = cmds.listRelatives(parent[0], c=True, type="joint") or []
-        candidates.update(siblings)
-
-    for candidate in candidates:
-        if candidate == start:
-            continue
-        short = candidate.split("|")[-1]
-        if not short.startswith(f"{start_short}_Half"):
-            continue
-        half_joints.append(candidate)
-
-    return half_joints
-
-
-def _collect_half_data(start):
-    half_joints = _list_half_at_same_level(start)
-    if not half_joints:
-        return None
-
-    data = []
-    for half in half_joints:
-        infs = cmds.listRelatives(half, c=True, type="joint") or []
-        inf_infos = []
-        for inf in infs:
-            pos = cmds.xform(inf, q=True, ws=True, t=True)
-            radius = 1.0
-            try:
-                radius = cmds.getAttr(inf + ".radius")
-            except Exception:
-                pass
-            driven_attrs = _list_driven_attributes(inf)
-            inf_infos.append({
-                "name": inf,
-                "position": pos,
-                "radius": radius,
-                "driven": driven_attrs,
-            })
-        ro = cmds.getAttr(half + ".rotateOrder")
-        try:
-            half_radius = cmds.getAttr(half + ".radius")
-        except Exception:
-            half_radius = 1.0
-        data.append({
-            "name": half,
-            "rotateOrder": ro,
-            "radius": half_radius,
-            "infs": inf_infos,
-        })
-    return data
-
-
-def _cleanup_half(mirror_start):
-    half_joints = _list_half_at_same_level(mirror_start)
-    if half_joints:
-        cmds.delete(half_joints)
 
 
 def _copy_driven_keys(src, dst, attrs):
@@ -484,7 +214,7 @@ def _copy_driven_keys(src, dst, attrs):
         try:
             cmds.cutKey(dst, attribute=attr)
         except RuntimeError as exc:
-            cmds.warning(u"{0}: cutKey 失敗 ({1})".format(dst_attr, exc))
+            cmds.warning("{0}: cutKey failed ({1})".format(dst_attr, exc))
 
         duplicated_curves = []
         for curve in source_curves:
@@ -494,14 +224,14 @@ def _copy_driven_keys(src, dst, attrs):
                 try:
                     duplicated = cmds.duplicate(curve)[0]
                 except RuntimeError as exc:
-                    cmds.warning(u"{0} の複製に失敗しました: {1}".format(curve, exc))
+                    cmds.warning("Failed to duplicate {0}: {1}".format(curve, exc))
                     continue
 
             duplicated_curves.append(duplicated)
             try:
                 cmds.connectAttr(duplicated + ".output", dst_attr, f=True)
             except RuntimeError as exc:
-                cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(duplicated, dst_attr, exc))
+                cmds.warning("Failed to connect {0} to {1}: {2}".format(duplicated, dst_attr, exc))
                 try:
                     cmds.delete(duplicated)
                 except RuntimeError:
@@ -521,7 +251,7 @@ def _copy_driven_keys(src, dst, attrs):
                 try:
                     cmds.connectAttr(mirrored_attr, duplicated + ".input", f=True)
                 except RuntimeError as exc:
-                    cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(mirrored_attr, duplicated + ".input", exc))
+                    cmds.warning("Failed to connect {0} to {1}: {2}".format(mirrored_attr, duplicated + ".input", exc))
                     continue
                 try:
                     cmds.disconnectAttr(plug, duplicated + ".input")
@@ -544,97 +274,14 @@ def _copy_driven_keys(src, dst, attrs):
                     cmds.connectAttr(mirrored_driver, duplicated + ".input", f=True)
                     break
                 except RuntimeError as exc:
-                    cmds.warning(u"{0} を {1} に接続できませんでした: {2}".format(mirrored_driver, duplicated + ".input", exc))
+                    cmds.warning("Failed to connect {0} to {1}: {2}".format(mirrored_driver, duplicated + ".input", exc))
                     continue
 
         if duplicated_curves and _should_negate_attr(attr):
             try:
                 cmds.scaleKey(dst, attribute=attr, valueScale=-1)
             except RuntimeError as exc:
-                cmds.warning(u"{0}: scaleKey 失敗 ({1})".format(dst_attr, exc))
-
-def _build_half_chain(data, mirror_start):
-    if not data:
-        return
-
-    if not cmds.objExists(mirror_start):
-        return
-
-    _cleanup_half(mirror_start)
-
-    layer = _ensure_display_layer(HALF_LAYER)
-    created_halves = []
-
-    for info in data:
-        mirror_name = _mirror_name(info["name"])
-        if not mirror_name:
-            continue
-
-        prev_halfs = set(_list_half_at_same_level(mirror_start))
-        prev_sel = cmds.ls(sl=True)
-        try:
-            cmds.select(mirror_start, r=True)
-            create_half_rotation_joint()
-        finally:
-            if prev_sel:
-                cmds.select(prev_sel, r=True)
-            else:
-                cmds.select(clear=True)
-
-        new_halfs = list(set(_list_half_at_same_level(mirror_start)) - prev_halfs)
-        if not new_halfs:
-            cmds.warning(u"{0} のHalfジョイント作成に失敗しました。".format(mirror_name))
-            continue
-
-        new_halfs.sort()
-        half = new_halfs[0]
-        half = cmds.rename(half, _uniquify(mirror_name))
-
-        try:
-            cmds.setAttr(half + ".rotateOrder", info["rotateOrder"])
-        except Exception:
-            pass
-        try:
-            cmds.setAttr(half + ".radius", max(0.01, info["radius"]))
-        except Exception:
-            pass
-
-        existing_children = cmds.listRelatives(half, c=True, type="joint") or []
-        if existing_children:
-            cmds.delete(existing_children)
-
-        created_infs = []
-        half_short = half.split("|")[-1]
-        for inf_info in info["infs"]:
-            inf_name = _mirror_name(inf_info["name"]) or (half_short + "_INF")
-            inf_name = _uniquify(inf_name)
-            cmds.select(clear=True)
-            inf = cmds.joint(n=inf_name)
-            cmds.parent(inf, half)
-            cmds.setAttr(inf + ".translate", 0, 0, 0, type="double3")
-            cmds.setAttr(inf + ".rotate", 0, 0, 0, type="double3")
-            cmds.setAttr(inf + ".jointOrient", 0, 0, 0, type="double3")
-            try:
-                cmds.setAttr(inf + ".radius", max(0.01, inf_info["radius"]))
-            except Exception:
-                pass
-
-            pos = inf_info["position"]
-            mirror_pos = [-pos[0], pos[1], pos[2]]
-            cmds.xform(inf, ws=True, t=mirror_pos)
-
-            _copy_driven_keys(inf_info["name"], inf, inf_info["driven"])
-            created_infs.append(inf)
-
-        try:
-            cmds.editDisplayLayerMembers(layer, [half] + created_infs, nr=True)
-        except Exception:
-            pass
-
-        created_halves.append(half)
-
-    if created_halves:
-        cmds.inViewMessage(amg=u"<hl>Half ミラー作成</hl>", pos="topCenter", fade=True)
+                cmds.warning("{0}: scaleKey failed ({1})".format(dst_attr, exc))
 
 
 def _collect_support_data(start, mirror_start):
@@ -766,7 +413,7 @@ def _support_mirror_name(info):
 def mirror_twist_and_half():
     selection = cmds.ls(sl=True, type="joint") or []
     if not selection:
-        cmds.warning(u"ジョイントを選択してください。")
+        cmds.warning("Select a joint.")
         return
 
     cmds.undoInfo(openChunk=True)
@@ -776,18 +423,32 @@ def mirror_twist_and_half():
             mirror_exists = mirror_joint and cmds.objExists(mirror_joint)
 
             if mirror_joint and not mirror_exists:
-                cmds.warning(u"{0} のミラー先ジョイントが見つかりません。".format(joint))
+                cmds.warning("Mirror joint for {0} was not found; skipping twist/half mirroring.".format(joint))
 
             if mirror_exists:
-                twist_data = _collect_twist_data(joint)
+                twist_data = collect_twist_chain_data(joint)
                 if twist_data:
-                    _build_twist_chain(twist_data, mirror_joint)
+                    build_twist_chain_from_data(
+                        mirror_joint,
+                        twist_data,
+                        copy_driven_callback=_copy_driven_keys,
+                        select_result=True,
+                        show_message=True,
+                    )
 
-                half_data = _collect_half_data(joint)
+                half_data = collect_half_joint_data(joint)
                 if half_data:
-                    _build_half_chain(half_data, mirror_joint)
+                    build_half_chain_from_data(
+                        mirror_joint,
+                        half_data,
+                        name_mapper=_mirror_name,
+                        position_mapper=_mirror_position,
+                        copy_driven_callback=_copy_driven_keys,
+                        select_result=False,
+                        show_message=True,
+                    )
             elif not mirror_joint:
-                cmds.warning(u"{0} には '_L' / '_R' の識別子がないため、Twist/Half のミラーをスキップします。".format(joint))
+                cmds.warning("{0} does not contain '_L' or '_R'; skipping twist/half mirroring.".format(joint))
 
             support_data = _collect_support_data(joint, mirror_joint if mirror_exists else None)
             if support_data:

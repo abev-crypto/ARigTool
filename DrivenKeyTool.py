@@ -513,7 +513,6 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                             pass
                     cmds.setDrivenKeyframe(plug, cd=driver_attr)
         finally:
-            cmds.undoInfo(closeChunk=True)
 
             if original_driver_value is not None:
                 restored_driver = (
@@ -543,6 +542,7 @@ class DrivenKeyToolDialog(QtWidgets.QDialog):
                     cmds.select(clear=True)
                 except Exception:
                     pass
+            cmds.undoInfo(closeChunk=True)
 
         cmds.inViewMessage(amg=u"<hl>Driven Key</hl> 設定完了", pos="topCenter", fade=True)
 
