@@ -79,6 +79,16 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         self.refresh_button = QtWidgets.QPushButton("Refresh From Selection")
         self.refresh_button.setToolTip("選択中のジョイントに設定されたドリブンキーを一覧表示します。")
 
+        self.add_input_label = QtWidgets.QLabel("Input:")
+        self.add_input_spinbox = QtWidgets.QDoubleSpinBox()
+        self.add_input_spinbox.setDecimals(3)
+        self.add_input_spinbox.setRange(-1000000.0, 1000000.0)
+        self.add_input_spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.add_key_button = QtWidgets.QPushButton("Add Key")
+        self.add_key_button.setToolTip(
+            "指定したInput値で選択中のアトリビュートに新しいキーを追加します。"
+        )
+
         self.auto_mirror_checkbox = QtWidgets.QCheckBox("Mirror to opposite joints automatically")
         self.auto_mirror_checkbox.setToolTip(
             "オンの場合、値を変更した際にミラー側のジョイントにも自動で反映します。"
@@ -113,6 +123,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         main_layout = QtWidgets.QVBoxLayout(self)
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(self.refresh_button)
+        button_layout.addWidget(self.add_input_label)
+        button_layout.addWidget(self.add_input_spinbox)
+        button_layout.addWidget(self.add_key_button)
         button_layout.addWidget(self.auto_mirror_checkbox)
         button_layout.addStretch(1)
         button_layout.addWidget(self.mirror_button)
@@ -124,6 +137,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _create_connections(self) -> None:
         self.refresh_button.clicked.connect(self.refresh_from_selection)
+        self.add_key_button.clicked.connect(self.add_key_for_selection)
         self.close_button.clicked.connect(self.close)
         self.mirror_button.clicked.connect(self.apply_mirror_from_selection)
         self.table_widget.itemChanged.connect(self._on_item_changed)
@@ -568,6 +582,84 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 item.setData(QtCore.Qt.EditRole, value)
         finally:
             self.table_widget.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    def _find_entry_for_anim_curve(
+        self, anim_curve: str, input_value: float
+    ) -> Optional[DrivenKeyEntry]:
+        for entry in self._row_entries:
+            if entry.anim_curve != anim_curve:
+                continue
+            if abs(entry.input_value - input_value) > 1e-5:
+                continue
+            return entry
+        return None
+
+    def add_key_for_selection(self) -> None:
+        if not self._row_entries:
+            self.info_label.setText("キーを追加する前にRefreshしてください。")
+            return
+
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is None:
+            self.info_label.setText("キー追加対象の行を選択してください。")
+            return
+
+        rows = {index.row() for index in selection_model.selectedRows()}
+        if not rows:
+            self.info_label.setText("キー追加対象の行を選択してください。")
+            return
+
+        input_value = self.add_input_spinbox.value()
+
+        added_entries = []
+        errors = []
+        for row in sorted(rows):
+            if not (0 <= row < len(self._row_entries)):
+                continue
+            entry = self._row_entries[row]
+            try:
+                output_value = float(cmds.getAttr(f"{entry.joint}.{entry.attribute}"))
+            except Exception as exc:  # pragma: no cover - Maya依存のため
+                errors.append(str(exc))
+                continue
+
+            try:
+                cmds.setKeyframe(
+                    entry.anim_curve,
+                    float=input_value,
+                    value=output_value,
+                )
+                added_entries.append((entry.anim_curve, input_value, output_value))
+            except Exception as exc:  # pragma: no cover - Maya依存のため
+                errors.append(str(exc))
+
+        self.refresh_from_selection()
+
+        mirror_updates = 0
+        if self.auto_mirror_checkbox.isChecked():
+            for anim_curve, new_input, new_output in added_entries:
+                entry = self._find_entry_for_anim_curve(anim_curve, new_input)
+                if not entry:
+                    continue
+                if self._update_mirror_entry(
+                    entry,
+                    {
+                        self.COLUMN_INPUT: new_input,
+                        self.COLUMN_OUTPUT: new_output,
+                    },
+                ):
+                    mirror_updates += 1
+
+        if added_entries:
+            message = f"{len(added_entries)} 件のキーを追加しました。"
+            if mirror_updates:
+                message += f" (ミラー {mirror_updates} 件)"
+            self.info_label.setText(message)
+        elif errors:
+            self.info_label.setText(f"キー追加中にエラー: {errors[0]}")
+        else:
+            self.info_label.setText("キーを追加できませんでした。")
 
     # ------------------------------------------------------------------
     def apply_mirror_from_selection(self) -> None:
