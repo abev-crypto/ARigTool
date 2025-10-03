@@ -193,6 +193,7 @@ def create_half_rotation_joint(skip_rotate_x=None):
             cmds.inViewMessage(amg="<hl>Half Rotation Created</hl><br>{0}".format(msg), pos="topCenter", fade=True, alpha=0.9)
 def _list_half_at_same_level(start: str) -> List[str]:
     start_short = start.split("|")[-1]
+    base_short = _strip_duplicate_suffix(start_short)
     half_joints: List[str] = []
     candidates = set(cmds.listRelatives(start, c=True, type="joint") or [])
     parent = cmds.listRelatives(start, p=True) or []
@@ -203,7 +204,8 @@ def _list_half_at_same_level(start: str) -> List[str]:
         if candidate == start:
             continue
         short = candidate.split("|")[-1]
-        if short.startswith(f"{start_short}_Half"):
+        short_base = _strip_duplicate_suffix(short)
+        if short_base.startswith(f"{base_short}_Half"):
             half_joints.append(candidate)
     return half_joints
 def collect_half_joint_data(start: str) -> Optional[List[Dict[str, object]]]:
