@@ -133,18 +133,23 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _create_layout(self) -> None:
         main_layout = QtWidgets.QVBoxLayout(self)
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.addWidget(self.refresh_button)
-        button_layout.addWidget(self.add_input_label)
-        button_layout.addWidget(self.add_input_spinbox)
-        button_layout.addWidget(self.add_key_button)
-        button_layout.addWidget(self.collect_button)
-        button_layout.addWidget(self.auto_mirror_checkbox)
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.mirror_button)
-        button_layout.addWidget(self.close_button)
 
-        main_layout.addLayout(button_layout)
+        controls_layout = QtWidgets.QHBoxLayout()
+        controls_layout.addWidget(self.refresh_button)
+        controls_layout.addWidget(self.add_input_label)
+        controls_layout.addWidget(self.add_input_spinbox)
+        controls_layout.addWidget(self.add_key_button)
+        controls_layout.addWidget(self.collect_button)
+        controls_layout.addStretch(1)
+
+        mirror_layout = QtWidgets.QHBoxLayout()
+        mirror_layout.addWidget(self.auto_mirror_checkbox)
+        mirror_layout.addStretch(1)
+        mirror_layout.addWidget(self.mirror_button)
+        mirror_layout.addWidget(self.close_button)
+
+        main_layout.addLayout(controls_layout)
+        main_layout.addLayout(mirror_layout)
         main_layout.addWidget(self.table_widget)
         main_layout.addWidget(self.info_label)
 
@@ -354,7 +359,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     mirror_entry.anim_curve,
                     index=(mirror_entry.key_index, mirror_entry.key_index),
                     edit=True,
-                    float=(mirrored_input,),
+                    floatChange=mirrored_input,
                 )
                 mirror_entry.input_value = mirrored_input
             if self.COLUMN_OUTPUT in values:
@@ -460,7 +465,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         anim_curves: List[str] = []
         for curve_type in ANIM_CURVE_TYPES:
             anim_curves.extend(
-                cmds.listConnections(joint_name, type=curve_type, s=True, d=False) or []
+                cmds.listConnections(joint_name, type=curve_type, s=True, d=False, scn=True) or []
             )
         seen_curves = set()
         for anim_curve in anim_curves:
@@ -491,7 +496,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _anim_curve_attribute(self, joint: str, anim_curve: str) -> str:
         outputs = cmds.listConnections(
-            f"{anim_curve}.output", plugs=True, s=False, d=True
+            f"{anim_curve}.output", plugs=True, s=False, d=True, scn=True
         ) or []
         joint_long = cmds.ls(joint, l=True) or [joint]
         joint_long_name = joint_long[0]
@@ -518,7 +523,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
 
     def _anim_curve_driver_info(self, anim_curve: str) -> Tuple[str, str]:
         inputs = cmds.listConnections(
-            f"{anim_curve}.input", plugs=True, s=True, d=False
+            f"{anim_curve}.input", plugs=True, s=True, d=False, scn=True
         ) or []
         for plug in inputs:
             if "." not in plug:

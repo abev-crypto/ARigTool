@@ -170,6 +170,7 @@ def _is_half_support_joint(joint):
 
 
 def _list_connected_anim_curves(target, **kwargs):
+    kwargs.setdefault("scn", True)
     connections = cmds.listConnections(target, **kwargs) or []
     result = []
     for connection in connections:
@@ -183,7 +184,7 @@ def _list_driven_attributes(node):
     anim_curves = _list_connected_anim_curves(node, s=True, d=False) or []
     attrs = []
     for curve in anim_curves:
-        outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True) or []
+        outputs = cmds.listConnections(curve + ".output", s=False, d=True, p=True, scn=True) or []
         for plug in outputs:
             attrs.append(plug.split(".", 1)[1])
     return sorted(set(attrs))
@@ -239,7 +240,7 @@ def _copy_driven_keys(src, dst, attrs):
                 duplicated_curves.pop()
                 continue
 
-            existing_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True) or []
+            existing_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True, scn=True) or []
             for plug in existing_inputs:
                 mirrored_attr = _mirror_attribute_plug(plug)
                 if not mirrored_attr or mirrored_attr == plug:
@@ -258,7 +259,7 @@ def _copy_driven_keys(src, dst, attrs):
                 except RuntimeError:
                     pass
 
-            final_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True) or []
+            final_inputs = cmds.listConnections(duplicated + ".input", s=True, d=False, p=True, scn=True) or []
             if final_inputs:
                 continue
 
