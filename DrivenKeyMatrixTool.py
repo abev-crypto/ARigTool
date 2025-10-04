@@ -328,7 +328,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         """Return the multiplier to apply when mirroring a value for *attribute*."""
 
         attr_lower = attribute.lower()
-        if attr_lower.endswith("y"):
+        if attr_lower.startswith("translate") and attr_lower.endswith("y"):
+            return -1.0
+        if attr_lower.startswith("rotate") and (attr_lower.endswith("x") or attr_lower.endswith("z")):
             return -1.0
         return 1.0
 

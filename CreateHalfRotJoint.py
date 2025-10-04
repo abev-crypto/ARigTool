@@ -146,6 +146,10 @@ def _create_half_rotation_joint_internal(
     cmds.select(clear=True)
     inf = cmds.joint(n=inf_name)
     cmds.parent(inf, half)
+    try:
+        cmds.matchTransform(inf, half, pos=False, rot=True, scl=False)
+    except Exception:
+        pass
     cmds.setAttr(inf + ".translate", 0, 0, 0, type="double3")
     cmds.setAttr(inf + ".rotate", 0, 0, 0, type="double3")
     cmds.setAttr(inf + ".jointOrient", 0, 0, 0, type="double3")
@@ -320,6 +324,10 @@ def build_half_chain_from_data(
             cmds.select(clear=True)
             inf = cmds.joint(n=target_inf_name)
             cmds.parent(inf, half)
+            try:
+                cmds.matchTransform(inf, half, pos=False, rot=True, scl=False)
+            except Exception:
+                pass
             cmds.setAttr(inf + ".translate", 0, 0, 0, type="double3")
             cmds.setAttr(inf + ".rotate", 0, 0, 0, type="double3")
             cmds.setAttr(inf + ".jointOrient", 0, 0, 0, type="double3")
