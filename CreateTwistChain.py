@@ -49,13 +49,33 @@ TWIST_NODE_TYPES: Set[str] = {
     "condition",
 }
 _AXES: Tuple[str, ...] = ("X", "Y", "Z")
+_AXES_WITH_SIGN: Tuple[str, ...] = ("X", "Y", "Z", "-X", "-Y", "-Z")
+
+
+def _normalize_twist_axis_with_sign(twist_axis: Optional[str]) -> Tuple[str, int]:
+    raw_axis = (twist_axis or "X").strip()
+    if not raw_axis:
+        raw_axis = "X"
+
+    sign = 1
+    if raw_axis[0] in "+-":
+        sign = -1 if raw_axis[0] == "-" else 1
+        raw_axis = raw_axis[1:]
+
+    axis = raw_axis.upper()
+    if axis not in _AXES:
+        raise ValueError("Invalid twist axis: {0}".format(twist_axis))
+
+    return axis, sign
 
 
 def _normalize_twist_axis(twist_axis: str) -> str:
-    axis = (twist_axis or "X").upper()
-    if axis not in _AXES:
-        raise ValueError("Invalid twist axis: {0}".format(twist_axis))
+    axis, _ = _normalize_twist_axis_with_sign(twist_axis)
     return axis
+
+
+def _format_twist_axis(axis: str, sign: int) -> str:
+    return f"-{axis}" if sign < 0 else axis
 
 
 def _list_base_children(joint):
@@ -126,7 +146,8 @@ def _detect_twist_axis_from_joints(twist_joints: Sequence[str]) -> str:
             for plug in connections:
                 node = plug.split(".")[0]
                 if cmds.nodeType(node) in TWIST_NODE_TYPES:
-                    return axis
+                    sign = _detect_twist_axis_sign(plug)
+                    return _format_twist_axis(axis, sign)
     return "X"
 
 
@@ -141,6 +162,25 @@ def _detect_twist_driver_axis(start_joint: str) -> str:
     return "X"
 
 
+def _detect_twist_axis_sign(plug: str) -> int:
+    node = plug.split(".")[0]
+    node_type = cmds.nodeType(node)
+    if node_type == "multDoubleLinear":
+        try:
+            value = cmds.getAttr(node + ".input2")
+            if abs(abs(value) - 1.0) < 1e-3:
+                return -1 if value < 0 else 1
+        except Exception:
+            pass
+
+        upstream = cmds.listConnections(node + ".input1", s=True, d=False, p=True) or []
+        for up in upstream:
+            sign = _detect_twist_axis_sign(up)
+            if sign in (-1, 1):
+                return sign
+    return 1
+
+
 def _create_standard_twist_chain(
     start,
     ref,
@@ -152,6 +192,7 @@ def _create_standard_twist_chain(
     scale_at_90,
     twist_axis,
     driver_axis,
+    twist_axis_sign=1,
 ):
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis)
@@ -228,7 +269,12 @@ def _create_standard_twist_chain(
         cmds.connectAttr(start + driver_rotate_attr, pma_add + ".input1D[0]", f=True)
         cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
 
-        cmds.connectAttr(pma_add + ".output1D", j + twist_rotate_attr, f=True)
+        axis_sign_md = cmds.createNode(
+            "multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_axis_MD"
+        )
+        cmds.setAttr(axis_sign_md + ".input2", twist_axis_sign)
+        cmds.connectAttr(pma_add + ".output1D", axis_sign_md + ".input1", f=True)
+        cmds.connectAttr(axis_sign_md + ".output", j + twist_rotate_attr, f=True)
         for ax in other_axes:
             cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
 
@@ -279,6 +325,7 @@ def _create_reverse_twist_chain(
     twist_axis,
     driver_axis,
     start_parent=None,
+    twist_axis_sign=1,
 ):
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis)
@@ -395,7 +442,12 @@ def _create_reverse_twist_chain(
         md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{suffix}_MD")
         cmds.connectAttr(start + driver_rotate_attr, md + ".input1", f=True)
         cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
-        cmds.connectAttr(md + ".output", j + twist_rotate_attr, f=True)
+        axis_sign_md = cmds.createNode(
+            "multDoubleLinear", n=f"{base_tag}_twist{suffix}_axis_MD"
+        )
+        cmds.setAttr(axis_sign_md + ".input2", twist_axis_sign)
+        cmds.connectAttr(md + ".output", axis_sign_md + ".input1", f=True)
+        cmds.connectAttr(axis_sign_md + ".output", j + twist_rotate_attr, f=True)
 
         scale_factor = float(idx)
         scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
@@ -437,6 +489,7 @@ def _create_twist_chain_internal(
     allow_start_rename: bool = True,
     twist_axis: str = "X",
     driver_axis: Optional[str] = None,
+    twist_axis_sign: int = 1,
 ) -> List[str]:
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis or twist_axis)
@@ -495,6 +548,7 @@ def _create_twist_chain_internal(
             scale_at_90=scale_at_90,
             twist_axis=twist_axis,
             driver_axis=driver_axis,
+            twist_axis_sign=twist_axis_sign,
             start_parent=start_parent,
         )
     else:
@@ -509,6 +563,7 @@ def _create_twist_chain_internal(
             scale_at_90=scale_at_90,
             twist_axis=twist_axis,
             driver_axis=driver_axis,
+            twist_axis_sign=twist_axis_sign,
         )
 
     if manage_display_layer and created:
@@ -562,8 +617,8 @@ def create_twist_chain(
         reverse_twist: When ``True`` a reverse twist setup is created instead
             of the forward chain.
         twist_axis: Axis that will receive the computed twist on the generated
-            joints. The value is case-insensitive and must be one of ``"X"``,
-            ``"Y"`` or ``"Z"``.
+            joints. The value is case-insensitive and may optionally be
+            prefixed with ``-`` to invert the result (for example ``"-X"``).
         driver_axis: Axis from the target joint that will be sampled to drive
             the twist computation. When ``None`` the value of ``twist_axis`` is
             used.
@@ -574,10 +629,11 @@ def create_twist_chain(
         cmds.error("Select at least one joint.")
 
     start = sel[0]
-    normalized_twist_axis = _normalize_twist_axis(twist_axis)
+    normalized_twist_axis, twist_axis_sign = _normalize_twist_axis_with_sign(twist_axis)
     normalized_driver_axis = (
         _normalize_twist_axis(driver_axis) if driver_axis else normalized_twist_axis
     )
+    display_twist_axis = _format_twist_axis(normalized_twist_axis, twist_axis_sign)
 
     cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
     try:
@@ -590,6 +646,7 @@ def create_twist_chain(
             allow_start_rename=True,
             twist_axis=normalized_twist_axis,
             driver_axis=normalized_driver_axis,
+            twist_axis_sign=twist_axis_sign,
         )
     finally:
         cmds.undoInfo(closeChunk=True)
@@ -598,7 +655,7 @@ def create_twist_chain(
         cmds.select(created, r=True)
         print(
             "[Twist] created (twist axis {0}, driver axis {1}): {2}".format(
-                normalized_twist_axis,
+                display_twist_axis,
                 normalized_driver_axis,
                 created,
             )
@@ -618,7 +675,7 @@ def create_twist_chain_for_joint(
     twist_axis: str = "X",
     driver_axis: Optional[str] = None,
 ) -> List[str]:
-    normalized_twist_axis = _normalize_twist_axis(twist_axis)
+    normalized_twist_axis, twist_axis_sign = _normalize_twist_axis_with_sign(twist_axis)
     normalized_driver_axis = (
         _normalize_twist_axis(driver_axis) if driver_axis else normalized_twist_axis
     )
@@ -635,6 +692,7 @@ def create_twist_chain_for_joint(
             allow_start_rename=allow_start_rename,
             twist_axis=normalized_twist_axis,
             driver_axis=normalized_driver_axis,
+            twist_axis_sign=twist_axis_sign,
         )
     finally:
         if use_undo_chunk:
@@ -943,7 +1001,7 @@ if QtWidgets is not None:
 
             self.axis_label = QtWidgets.QLabel(u"ツイスト軸:")
             self.axis_combo = QtWidgets.QComboBox()
-            self.axis_combo.addItems(list(_AXES))
+            self.axis_combo.addItems(list(_AXES_WITH_SIGN))
             self.axis_combo.setEnabled(False)
             self.axis_combo.setToolTip(
                 u"生成されるツイストジョイントの回転軸を選択します。"
@@ -1050,9 +1108,11 @@ if QtWidgets is not None:
 
             if joints:
                 try:
-                    normalized_twist_axis = _normalize_twist_axis(twist_axis or "X")
+                    normalized_twist_axis, twist_sign = _normalize_twist_axis_with_sign(
+                        twist_axis or "X"
+                    )
                 except ValueError:
-                    normalized_twist_axis = "X"
+                    normalized_twist_axis, twist_sign = "X", 1
                 try:
                     normalized_driver_axis = _normalize_twist_axis(
                         driver_axis or normalized_twist_axis
@@ -1061,8 +1121,11 @@ if QtWidgets is not None:
                     normalized_driver_axis = normalized_twist_axis
 
                 self.axis_combo.setEnabled(True)
+                display_twist_axis = _format_twist_axis(
+                    normalized_twist_axis, twist_sign
+                )
                 twist_index = self.axis_combo.findText(
-                    normalized_twist_axis, QtCore.Qt.MatchFixedString
+                    display_twist_axis, QtCore.Qt.MatchFixedString
                 )
                 if twist_index < 0:
                     twist_index = 0
@@ -1078,7 +1141,7 @@ if QtWidgets is not None:
 
                 self._current_base_joint = base_joint
                 self._current_reverse_twist = bool(reverse_twist)
-                self._current_twist_axis = normalized_twist_axis
+                self._current_twist_axis = display_twist_axis
                 self._current_driver_axis = normalized_driver_axis
             else:
                 self.axis_combo.setEnabled(False)
@@ -1125,9 +1188,12 @@ if QtWidgets is not None:
                 return
 
             try:
-                selected_twist_axis = _normalize_twist_axis(self.axis_combo.currentText())
+                (
+                    selected_twist_axis,
+                    selected_twist_sign,
+                ) = _normalize_twist_axis_with_sign(self.axis_combo.currentText())
             except ValueError:
-                selected_twist_axis = "X"
+                selected_twist_axis, selected_twist_sign = "X", 1
 
             try:
                 selected_driver_axis = _normalize_twist_axis(
@@ -1136,8 +1202,11 @@ if QtWidgets is not None:
             except ValueError:
                 selected_driver_axis = selected_twist_axis
 
+            selected_twist_axis_display = _format_twist_axis(
+                selected_twist_axis, selected_twist_sign
+            )
             axes_changed = (
-                selected_twist_axis != self._current_twist_axis
+                selected_twist_axis_display != self._current_twist_axis
                 or selected_driver_axis != self._current_driver_axis
             )
 
@@ -1195,7 +1264,7 @@ if QtWidgets is not None:
                     select_result=False,
                     allow_start_rename=False,
                     use_undo_chunk=False,
-                    twist_axis=selected_twist_axis,
+                    twist_axis=selected_twist_axis_display,
                     driver_axis=selected_driver_axis,
                 )
 

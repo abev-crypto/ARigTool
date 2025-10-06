@@ -92,7 +92,7 @@ class TwistChainDialog(QtWidgets.QDialog):
 
         self.axis_label = QtWidgets.QLabel(u"ツイスト軸:")
         self.axis_combo = QtWidgets.QComboBox()
-        self.axis_combo.addItems(["X", "Y", "Z"])
+        self.axis_combo.addItems(["X", "Y", "Z", "-X", "-Y", "-Z"])
         self.axis_combo.setToolTip(
             u"生成されるツイストジョイントの回転軸を選択します。"
         )
