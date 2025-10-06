@@ -130,6 +130,17 @@ def _detect_twist_axis_from_joints(twist_joints: Sequence[str]) -> str:
     return "X"
 
 
+def _detect_twist_driver_axis(start_joint: str) -> str:
+    for axis in _AXES:
+        rotate_attr = start_joint + ".rotate" + axis
+        outputs = cmds.listConnections(rotate_attr, s=False, d=True, p=True) or []
+        for plug in outputs:
+            node = plug.split(".")[0]
+            if cmds.nodeType(node) in TWIST_NODE_TYPES:
+                return axis
+    return "X"
+
+
 def _create_standard_twist_chain(
     start,
     ref,
@@ -140,15 +151,18 @@ def _create_standard_twist_chain(
     count,
     scale_at_90,
     twist_axis,
+    driver_axis,
 ):
     twist_axis = _normalize_twist_axis(twist_axis)
-    rotate_attr = ".rotate" + twist_axis
+    driver_axis = _normalize_twist_axis(driver_axis)
+    twist_rotate_attr = ".rotate" + twist_axis
+    driver_rotate_attr = ".rotate" + driver_axis
     other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
 
     pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
     cmds.setAttr(pma_sub + ".operation", 2)  # subtract
-    cmds.connectAttr(ref + rotate_attr, pma_sub + ".input1D[0]", f=True)
-    cmds.connectAttr(start + rotate_attr, pma_sub + ".input1D[1]", f=True)
+    cmds.connectAttr(ref + driver_rotate_attr, pma_sub + ".input1D[0]", f=True)
+    cmds.connectAttr(start + driver_rotate_attr, pma_sub + ".input1D[1]", f=True)
 
     abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
     cmds.setAttr(abs_neg + ".input2", -1)
@@ -211,10 +225,10 @@ def _create_standard_twist_chain(
 
         pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
         cmds.setAttr(pma_add + ".operation", 1)
-        cmds.connectAttr(start + rotate_attr, pma_add + ".input1D[0]", f=True)
+        cmds.connectAttr(start + driver_rotate_attr, pma_add + ".input1D[0]", f=True)
         cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
 
-        cmds.connectAttr(pma_add + ".output1D", j + rotate_attr, f=True)
+        cmds.connectAttr(pma_add + ".output1D", j + twist_rotate_attr, f=True)
         for ax in other_axes:
             cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
 
@@ -263,22 +277,25 @@ def _create_reverse_twist_chain(
     count,
     scale_at_90,
     twist_axis,
+    driver_axis,
     start_parent=None,
 ):
     twist_axis = _normalize_twist_axis(twist_axis)
-    rotate_attr = ".rotate" + twist_axis
+    driver_axis = _normalize_twist_axis(driver_axis)
+    twist_rotate_attr = ".rotate" + twist_axis
+    driver_rotate_attr = ".rotate" + driver_axis
     other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
 
     abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
     cmds.setAttr(abs_neg + ".input2", -1)
-    cmds.connectAttr(start + rotate_attr, abs_neg + ".input1", f=True)
+    cmds.connectAttr(start + driver_rotate_attr, abs_neg + ".input1", f=True)
 
     cond_abs = cmds.createNode("condition", n=f"{base_tag}_twistAbs_COND")
     cmds.setAttr(cond_abs + ".operation", 4)  # Less Than
     cmds.setAttr(cond_abs + ".secondTerm", 0)
-    cmds.connectAttr(start + rotate_attr, cond_abs + ".firstTerm", f=True)
+    cmds.connectAttr(start + driver_rotate_attr, cond_abs + ".firstTerm", f=True)
     cmds.connectAttr(abs_neg + ".output", cond_abs + ".colorIfTrueR", f=True)
-    cmds.connectAttr(start + rotate_attr, cond_abs + ".colorIfFalseR", f=True)
+    cmds.connectAttr(start + driver_rotate_attr, cond_abs + ".colorIfFalseR", f=True)
 
     twist_range = cmds.createNode("setRange", n=f"{base_tag}_twistAmount_SR")
     cmds.setAttr(twist_range + ".minX", 0)
@@ -316,9 +333,9 @@ def _create_reverse_twist_chain(
             pass
 
     try:
-        cmds.setAttr(root + rotate_attr, l=False, k=True, cb=True)
-        cmds.setAttr(root + rotate_attr, 0)
-        cmds.setAttr(root + rotate_attr, l=True, k=False, cb=False)
+        cmds.setAttr(root + twist_rotate_attr, l=False, k=True, cb=True)
+        cmds.setAttr(root + twist_rotate_attr, 0)
+        cmds.setAttr(root + twist_rotate_attr, l=True, k=False, cb=False)
     except Exception:
         pass
 
@@ -353,7 +370,7 @@ def _create_reverse_twist_chain(
         cmds.setAttr(j + ".translateX", length * ratio)
 
         try:
-            cmds.setAttr(j + rotate_attr, l=False, k=True, cb=True)
+            cmds.setAttr(j + twist_rotate_attr, l=False, k=True, cb=True)
         except Exception:
             pass
 
@@ -376,9 +393,9 @@ def _create_reverse_twist_chain(
         cmds.setAttr(j + "." + ratio_attr, ratio)
 
         md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{suffix}_MD")
-        cmds.connectAttr(start + rotate_attr, md + ".input1", f=True)
+        cmds.connectAttr(start + driver_rotate_attr, md + ".input1", f=True)
         cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
-        cmds.connectAttr(md + ".output", j + rotate_attr, f=True)
+        cmds.connectAttr(md + ".output", j + twist_rotate_attr, f=True)
 
         scale_factor = float(idx)
         scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
@@ -419,8 +436,10 @@ def _create_twist_chain_internal(
     manage_display_layer: bool = True,
     allow_start_rename: bool = True,
     twist_axis: str = "X",
+    driver_axis: Optional[str] = None,
 ) -> List[str]:
     twist_axis = _normalize_twist_axis(twist_axis)
+    driver_axis = _normalize_twist_axis(driver_axis or twist_axis)
 
     if not cmds.objExists(start):
         cmds.warning("Start joint {0} does not exist; skipping.".format(start))
@@ -475,6 +494,7 @@ def _create_twist_chain_internal(
             count=count,
             scale_at_90=scale_at_90,
             twist_axis=twist_axis,
+            driver_axis=driver_axis,
             start_parent=start_parent,
         )
     else:
@@ -488,6 +508,7 @@ def _create_twist_chain_internal(
             count=count,
             scale_at_90=scale_at_90,
             twist_axis=twist_axis,
+            driver_axis=driver_axis,
         )
 
     if manage_display_layer and created:
@@ -528,12 +549,35 @@ def create_twist_chain(
     scale_at_90=1.2,
     reverse_twist=False,
     twist_axis="X",
+    driver_axis=None,
 ):
+    """Create a twist chain for the first selected joint.
+
+    Args:
+        count: Number of twist joints to insert between the start and the
+            referenced child joint.
+        name_tag: Optional tag appended to the generated node names.
+        scale_at_90: Multiplier applied to the twist joint scale values when
+            the driving rotation reaches 90 degrees.
+        reverse_twist: When ``True`` a reverse twist setup is created instead
+            of the forward chain.
+        twist_axis: Axis that will receive the computed twist on the generated
+            joints. The value is case-insensitive and must be one of ``"X"``,
+            ``"Y"`` or ``"Z"``.
+        driver_axis: Axis from the target joint that will be sampled to drive
+            the twist computation. When ``None`` the value of ``twist_axis`` is
+            used.
+    """
+
     sel = cmds.ls(sl=True, type="joint") or []
     if not sel:
         cmds.error("Select at least one joint.")
 
     start = sel[0]
+    normalized_twist_axis = _normalize_twist_axis(twist_axis)
+    normalized_driver_axis = (
+        _normalize_twist_axis(driver_axis) if driver_axis else normalized_twist_axis
+    )
 
     cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
     try:
@@ -544,14 +588,21 @@ def create_twist_chain(
             scale_at_90=scale_at_90,
             reverse_twist=reverse_twist,
             allow_start_rename=True,
-            twist_axis=twist_axis,
+            twist_axis=normalized_twist_axis,
+            driver_axis=normalized_driver_axis,
         )
     finally:
         cmds.undoInfo(closeChunk=True)
 
     if created:
         cmds.select(created, r=True)
-        print("[Twist] created:", created)
+        print(
+            "[Twist] created (twist axis {0}, driver axis {1}): {2}".format(
+                normalized_twist_axis,
+                normalized_driver_axis,
+                created,
+            )
+        )
     return created
 
 def create_twist_chain_for_joint(
@@ -565,7 +616,13 @@ def create_twist_chain_for_joint(
     allow_start_rename: bool = False,
     use_undo_chunk: bool = True,
     twist_axis: str = "X",
+    driver_axis: Optional[str] = None,
 ) -> List[str]:
+    normalized_twist_axis = _normalize_twist_axis(twist_axis)
+    normalized_driver_axis = (
+        _normalize_twist_axis(driver_axis) if driver_axis else normalized_twist_axis
+    )
+
     if use_undo_chunk:
         cmds.undoInfo(openChunk=True, chunkName="CreateTwistChain")
     try:
@@ -576,7 +633,8 @@ def create_twist_chain_for_joint(
             scale_at_90=scale_at_90,
             reverse_twist=reverse_twist,
             allow_start_rename=allow_start_rename,
-            twist_axis=twist_axis,
+            twist_axis=normalized_twist_axis,
+            driver_axis=normalized_driver_axis,
         )
     finally:
         if use_undo_chunk:
@@ -621,6 +679,7 @@ def collect_twist_chain_data(start: str) -> Optional[Dict[str, object]]:
 
     joint_count = len(twist_joints)
     twist_axis = _detect_twist_axis_from_joints(twist_joints)
+    driver_axis = _detect_twist_driver_axis(start)
 
     return {
         "start": start,
@@ -634,6 +693,7 @@ def collect_twist_chain_data(start: str) -> Optional[Dict[str, object]]:
         "reverse_root": reverse_root,
         "reverse_root_driven": _list_driven_attributes(reverse_root) if reverse_root else [],
         "twist_axis": twist_axis,
+        "driver_axis": driver_axis,
     }
 
 
@@ -702,6 +762,7 @@ def build_twist_chain_from_data(
     twist_count = int(data.get("count", joint_count))
     reverse_twist = bool(data.get("reverse_twist", False))
     twist_axis = data.get("twist_axis", "X")
+    driver_axis = data.get("driver_axis") or twist_axis
 
     created_chain = create_twist_chain_for_joint(
         target_start,
@@ -712,6 +773,7 @@ def build_twist_chain_from_data(
         select_result=False,
         allow_start_rename=allow_start_rename,
         twist_axis=twist_axis,
+        driver_axis=driver_axis,
     )
     if not created_chain:
         return []
@@ -872,16 +934,28 @@ if QtWidgets is not None:
             self._current_base_joint: Optional[str] = None
             self._current_reverse_twist: bool = False
             self._current_twist_axis: str = "X"
+            self._current_driver_axis: str = "X"
 
             self._refresh_data()
 
         def _create_widgets(self):
             self.info_label = QtWidgets.QLabel("")
 
-            self.axis_label = QtWidgets.QLabel(u"ツイスト参照軸:")
+            self.axis_label = QtWidgets.QLabel(u"ツイスト軸:")
             self.axis_combo = QtWidgets.QComboBox()
             self.axis_combo.addItems(list(_AXES))
             self.axis_combo.setEnabled(False)
+            self.axis_combo.setToolTip(
+                u"生成されるツイストジョイントの回転軸を選択します。"
+            )
+
+            self.driver_axis_label = QtWidgets.QLabel(u"ターゲット軸:")
+            self.driver_axis_combo = QtWidgets.QComboBox()
+            self.driver_axis_combo.addItems(list(_AXES))
+            self.driver_axis_combo.setEnabled(False)
+            self.driver_axis_combo.setToolTip(
+                u"ターゲットジョイントから参照する回転軸を選択します。"
+            )
 
             self.table = QtWidgets.QTableWidget(0, 3)
             headers = [u"Joint", u"Twist Weight", u"Scale Max"]
@@ -903,10 +977,12 @@ if QtWidgets is not None:
             main_layout = QtWidgets.QVBoxLayout(self)
             main_layout.addWidget(self.info_label)
 
-            axis_layout = QtWidgets.QHBoxLayout()
-            axis_layout.addWidget(self.axis_label)
-            axis_layout.addWidget(self.axis_combo)
-            axis_layout.addStretch(1)
+            axis_layout = QtWidgets.QGridLayout()
+            axis_layout.addWidget(self.axis_label, 0, 0)
+            axis_layout.addWidget(self.axis_combo, 0, 1)
+            axis_layout.addWidget(self.driver_axis_label, 1, 0)
+            axis_layout.addWidget(self.driver_axis_combo, 1, 1)
+            axis_layout.setColumnStretch(1, 1)
             main_layout.addLayout(axis_layout)
 
             main_layout.addWidget(self.table)
@@ -947,12 +1023,14 @@ if QtWidgets is not None:
                 return
 
             twist_axis = _detect_twist_axis_from_joints(twist_joints)
+            driver_axis = _detect_twist_driver_axis(base)
 
             self._populate_table(
                 twist_joints,
                 message=info_message,
                 base_joint=base,
                 twist_axis=twist_axis,
+                driver_axis=driver_axis,
                 reverse_twist=reverse_twist,
             )
 
@@ -963,6 +1041,7 @@ if QtWidgets is not None:
             *,
             base_joint: Optional[str] = None,
             twist_axis: Optional[str] = None,
+            driver_axis: Optional[str] = None,
             reverse_twist: bool = False,
         ):
             self.table.setRowCount(0)
@@ -971,23 +1050,45 @@ if QtWidgets is not None:
 
             if joints:
                 try:
-                    normalized_axis = _normalize_twist_axis(twist_axis or "X")
+                    normalized_twist_axis = _normalize_twist_axis(twist_axis or "X")
                 except ValueError:
-                    normalized_axis = "X"
+                    normalized_twist_axis = "X"
+                try:
+                    normalized_driver_axis = _normalize_twist_axis(
+                        driver_axis or normalized_twist_axis
+                    )
+                except ValueError:
+                    normalized_driver_axis = normalized_twist_axis
+
                 self.axis_combo.setEnabled(True)
-                index = self.axis_combo.findText(normalized_axis, QtCore.Qt.MatchFixedString)
-                if index < 0:
-                    index = 0
-                self.axis_combo.setCurrentIndex(index)
+                twist_index = self.axis_combo.findText(
+                    normalized_twist_axis, QtCore.Qt.MatchFixedString
+                )
+                if twist_index < 0:
+                    twist_index = 0
+                self.axis_combo.setCurrentIndex(twist_index)
+
+                self.driver_axis_combo.setEnabled(True)
+                driver_index = self.driver_axis_combo.findText(
+                    normalized_driver_axis, QtCore.Qt.MatchFixedString
+                )
+                if driver_index < 0:
+                    driver_index = 0
+                self.driver_axis_combo.setCurrentIndex(driver_index)
+
                 self._current_base_joint = base_joint
                 self._current_reverse_twist = bool(reverse_twist)
-                self._current_twist_axis = normalized_axis
+                self._current_twist_axis = normalized_twist_axis
+                self._current_driver_axis = normalized_driver_axis
             else:
                 self.axis_combo.setEnabled(False)
+                self.driver_axis_combo.setEnabled(False)
                 self.axis_combo.setCurrentIndex(0)
+                self.driver_axis_combo.setCurrentIndex(0)
                 self._current_base_joint = None
                 self._current_reverse_twist = False
                 self._current_twist_axis = "X"
+                self._current_driver_axis = "X"
 
             for row, joint in enumerate(joints):
                 self.table.insertRow(row)
@@ -1024,9 +1125,21 @@ if QtWidgets is not None:
                 return
 
             try:
-                selected_axis = _normalize_twist_axis(self.axis_combo.currentText())
+                selected_twist_axis = _normalize_twist_axis(self.axis_combo.currentText())
             except ValueError:
-                selected_axis = "X"
+                selected_twist_axis = "X"
+
+            try:
+                selected_driver_axis = _normalize_twist_axis(
+                    self.driver_axis_combo.currentText()
+                )
+            except ValueError:
+                selected_driver_axis = selected_twist_axis
+
+            axes_changed = (
+                selected_twist_axis != self._current_twist_axis
+                or selected_driver_axis != self._current_driver_axis
+            )
 
             weights: List[float] = []
             scales: List[float] = []
@@ -1050,7 +1163,7 @@ if QtWidgets is not None:
                 weights.append(weight_value)
                 scales.append(scale_value)
 
-                if selected_axis == self._current_twist_axis:
+                if not axes_changed:
                     try:
                         cmds.setAttr(joint + ".twistWeight", weight_value)
                     except Exception:
@@ -1060,7 +1173,7 @@ if QtWidgets is not None:
                     except Exception:
                         pass
 
-            if selected_axis == self._current_twist_axis:
+            if not axes_changed:
                 return
 
             base_joint = self._current_base_joint
@@ -1082,7 +1195,8 @@ if QtWidgets is not None:
                     select_result=False,
                     allow_start_rename=False,
                     use_undo_chunk=False,
-                    twist_axis=selected_axis,
+                    twist_axis=selected_twist_axis,
+                    driver_axis=selected_driver_axis,
                 )
 
                 if not new_chain:
