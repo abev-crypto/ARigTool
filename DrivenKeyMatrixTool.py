@@ -464,13 +464,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         entries: List[DrivenKeyEntry] = []
         joint_long = cmds.ls(joint, l=True) or [joint]
         joint_name = joint_long[0]
-        anim_curves: List[str] = []
-        for curve_type in ANIM_CURVE_TYPES:
-            anim_curves.extend(
-                cmds.listConnections(joint_name, type=curve_type, s=True, d=False, scn=True) or []
-            )
+        anim_curves_with_attrs = self._gather_anim_curves_for_joint(joint_name)
         seen_curves = set()
-        for anim_curve in anim_curves:
+        for anim_curve, attribute_hint in anim_curves_with_attrs:
             if anim_curve in seen_curves:
                 continue
             seen_curves.add(anim_curve)
@@ -479,7 +475,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             if len(inputs) != len(outputs):
                 continue
 
-            attribute = self._anim_curve_attribute(joint_name, anim_curve)
+            attribute = attribute_hint or self._anim_curve_attribute(joint_name, anim_curve)
             driver_node, driver_attribute = self._anim_curve_driver_info(anim_curve)
             for index, (input_value, output_value) in enumerate(zip(inputs, outputs)):
                 entries.append(
@@ -495,6 +491,45 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                     )
                 )
         return entries
+
+    def _gather_anim_curves_for_joint(self, joint: str) -> List[Tuple[str, str]]:
+        anim_curves: List[Tuple[str, str]] = []
+        connections = cmds.listConnections(
+            joint, s=True, d=False, c=True, p=True, scn=True
+        ) or []
+        for source_plug, dest_plug in zip(connections[0::2], connections[1::2]):
+            attribute = ""
+            if "." in dest_plug:
+                _, attribute = dest_plug.split(".", 1)
+            source_node = source_plug.split(".", 1)[0]
+            source_long = cmds.ls(source_node, l=True) or [source_node]
+            source_name = source_long[0]
+            if not cmds.objExists(source_name):
+                continue
+            node_type = cmds.nodeType(source_name)
+            if node_type in ANIM_CURVE_TYPES:
+                anim_curves.append((source_name, attribute))
+            elif node_type == "blendWeighted":
+                anim_curves.extend(self._gather_anim_curves_from_blend(source_name, attribute))
+        return anim_curves
+
+    def _gather_anim_curves_from_blend(
+        self, blend_node: str, attribute: str
+    ) -> List[Tuple[str, str]]:
+        anim_curves: List[Tuple[str, str]] = []
+        connections = cmds.listConnections(
+            blend_node, s=True, d=False, c=True, p=True, scn=True
+        ) or []
+        for source_plug, _ in zip(connections[0::2], connections[1::2]):
+            source_node = source_plug.split(".", 1)[0]
+            source_long = cmds.ls(source_node, l=True) or [source_node]
+            source_name = source_long[0]
+            if not cmds.objExists(source_name):
+                continue
+            node_type = cmds.nodeType(source_name)
+            if node_type in ANIM_CURVE_TYPES:
+                anim_curves.append((source_name, attribute))
+        return anim_curves
 
     def _anim_curve_attribute(self, joint: str, anim_curve: str) -> str:
         outputs = cmds.listConnections(
