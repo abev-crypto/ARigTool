@@ -476,8 +476,21 @@ def _create_standard_twist_chain(
             except Exception:
                 pass
 
+            try:
+                cmds.connectAttr(
+                    quat_to_euler + ".outputRotate" + driver_axis,
+                    j + ".rotate" + twist_axis,
+                    f=True,
+                )
+            except Exception:
+                pass
+
             for ax in _AXES:
-                cmds.connectAttr(quat_to_euler + ".outputRotate" + ax, j + ".rotate" + ax, f=True)
+                if ax != twist_axis:
+                    try:
+                        cmds.setAttr(j + ".rotate" + ax, 0)
+                    except Exception:
+                        pass
                 try:
                     cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
                 except Exception:
