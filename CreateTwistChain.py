@@ -314,11 +314,15 @@ def _create_standard_twist_chain(
         euler_to_quat = cmds.createNode("eulerToQuat", n=f"{base_tag}_twistTarget_ETQ")
         for ax in _AXES:
             try:
-                cmds.connectAttr(start + ".rotate" + ax, euler_to_quat + ".inputRotate" + ax, f=True)
+                cmds.connectAttr(
+                    twist_target + ".rotate" + ax,
+                    euler_to_quat + ".inputRotate" + ax,
+                    f=True,
+                )
             except Exception:
                 pass
         try:
-            rotate_order = cmds.getAttr(start + ".rotateOrder")
+            rotate_order = cmds.getAttr(twist_target + ".rotateOrder")
             cmds.setAttr(euler_to_quat + ".inputRotateOrder", rotate_order)
         except Exception:
             pass
