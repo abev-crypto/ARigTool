@@ -52,6 +52,27 @@ _AXES: Tuple[str, ...] = ("X", "Y", "Z")
 _AXES_WITH_SIGN: Tuple[str, ...] = ("X", "Y", "Z", "-X", "-Y", "-Z")
 
 
+def _axis_to_vector(axis: str) -> Tuple[float, float, float]:
+    normalized = _normalize_twist_axis(axis)
+    if normalized == "X":
+        return (1.0, 0.0, 0.0)
+    if normalized == "Y":
+        return (0.0, 1.0, 0.0)
+    if normalized == "Z":
+        return (0.0, 0.0, 1.0)
+    raise ValueError("Invalid axis: {0}".format(axis))
+
+
+def _connect_quaternion(src_prefix: str, dst_prefix: str) -> None:
+    for suffix in ("X", "Y", "Z", "W"):
+        cmds.connectAttr(src_prefix + suffix, dst_prefix + suffix, f=True)
+
+
+def _set_quaternion(attr_prefix: str, values: Tuple[float, float, float, float]) -> None:
+    for suffix, value in zip(("X", "Y", "Z", "W"), values):
+        cmds.setAttr(attr_prefix + suffix, value)
+
+
 def _normalize_twist_axis_with_sign(twist_axis: Optional[str]) -> Tuple[str, int]:
     raw_axis = (twist_axis or "X").strip()
     if not raw_axis:
@@ -193,6 +214,7 @@ def _create_standard_twist_chain(
     twist_axis,
     driver_axis,
     twist_axis_sign=1,
+    use_matrix_twist=False,
 ):
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis)
@@ -222,6 +244,66 @@ def _create_standard_twist_chain(
     cmds.setAttr(twist_range + ".oldMinX", 0)
     cmds.setAttr(twist_range + ".oldMaxX", 90)
     cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
+
+    roll_quat_prefix: Optional[str] = None
+    if use_matrix_twist:
+        axis_vector = _axis_to_vector(driver_axis)
+        compose_axis = cmds.createNode("composeMatrix", n=f"{base_tag}_twistAxis_CM")
+        for axis_name, value in zip(_AXES, axis_vector):
+            cmds.setAttr(compose_axis + ".inputTranslate" + axis_name, value)
+
+        compose_rot = cmds.createNode("composeMatrix", n=f"{base_tag}_twistRotate_CM")
+        for ax in _AXES:
+            try:
+                cmds.connectAttr(start + ".rotate" + ax, compose_rot + ".inputRotate" + ax, f=True)
+            except Exception:
+                pass
+
+        mult_matrix = cmds.createNode("multMatrix", n=f"{base_tag}_twistAxis_MTMX")
+        cmds.connectAttr(compose_axis + ".outputMatrix", mult_matrix + ".matrixIn[0]", f=True)
+        cmds.connectAttr(compose_rot + ".outputMatrix", mult_matrix + ".matrixIn[1]", f=True)
+
+        decompose = cmds.createNode("decomposeMatrix", n=f"{base_tag}_twistAxis_DCM")
+        cmds.connectAttr(mult_matrix + ".matrixSum", decompose + ".inputMatrix", f=True)
+
+        angle_between = cmds.createNode("angleBetween", n=f"{base_tag}_twistAxis_AB")
+        for axis_name, value in zip(_AXES, axis_vector):
+            cmds.setAttr(angle_between + ".vector1" + axis_name, value)
+            cmds.connectAttr(
+                decompose + ".outputTranslate" + axis_name,
+                angle_between + ".vector2" + axis_name,
+                f=True,
+            )
+
+        axis_angle = cmds.createNode("axisAngleToQuat", n=f"{base_tag}_twistBend_AATQ")
+        for ax in _AXES:
+            cmds.connectAttr(angle_between + ".axis" + ax, axis_angle + ".axis" + ax, f=True)
+        cmds.connectAttr(angle_between + ".angle", axis_angle + ".angle", f=True)
+
+        quat_invert_bend = cmds.createNode("quatInvert", n=f"{base_tag}_twistBend_INV")
+        _connect_quaternion(axis_angle + ".outputQuat", quat_invert_bend + ".inputQuat")
+
+        euler_to_quat = cmds.createNode("eulerToQuat", n=f"{base_tag}_twistTarget_ETQ")
+        for ax in _AXES:
+            try:
+                cmds.connectAttr(start + ".rotate" + ax, euler_to_quat + ".inputRotate" + ax, f=True)
+            except Exception:
+                pass
+        try:
+            rotate_order = cmds.getAttr(start + ".rotateOrder")
+            cmds.setAttr(euler_to_quat + ".inputRotateOrder", rotate_order)
+        except Exception:
+            pass
+
+        quat_prod = cmds.createNode("quatProd", n=f"{base_tag}_twistRoll_QP")
+        _connect_quaternion(euler_to_quat + ".outputQuat", quat_prod + ".input1Quat")
+        _connect_quaternion(quat_invert_bend + ".outputQuat", quat_prod + ".input2Quat")
+
+        roll_quat_prefix = quat_prod + ".outputQuat"
+        if twist_axis_sign < 0:
+            roll_invert = cmds.createNode("quatInvert", n=f"{base_tag}_twistRollSign_INV")
+            _connect_quaternion(roll_quat_prefix, roll_invert + ".inputQuat")
+            roll_quat_prefix = roll_invert + ".outputQuat"
 
     created = []
     for idx in range(count):
@@ -261,29 +343,60 @@ def _create_standard_twist_chain(
 
         node_suffix = f"{step_index:02d}"
 
-        md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_MD")
-        cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
-
-        pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
-        cmds.setAttr(pma_add + ".operation", 1)
-        cmds.connectAttr(start + driver_rotate_attr, pma_add + ".input1D[0]", f=True)
-        cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
-
-        axis_sign_md = cmds.createNode(
-            "multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_axis_MD"
-        )
-        cmds.setAttr(axis_sign_md + ".input2", twist_axis_sign)
-        cmds.connectAttr(pma_add + ".output1D", axis_sign_md + ".input1", f=True)
-        cmds.connectAttr(axis_sign_md + ".output", j + twist_rotate_attr, f=True)
-        for ax in other_axes:
-            cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
-
         ratio_attr = "twistWeight"
         if not cmds.attributeQuery(ratio_attr, node=j, exists=True):
             cmds.addAttr(j, ln=ratio_attr, at="double", min=0.0, dv=ratio)
             cmds.setAttr(j + "." + ratio_attr, e=True, k=True)
         cmds.setAttr(j + "." + ratio_attr, ratio)
-        cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
+
+        if use_matrix_twist:
+            if roll_quat_prefix is None:
+                raise RuntimeError("Matrix-based twist setup is not available.")
+
+            for ax in _AXES:
+                try:
+                    cmds.setAttr(j + ".rotate" + ax, l=False, k=False, cb=False)
+                except Exception:
+                    pass
+
+            quat_slerp = cmds.createNode("quatSlerp", n=f"{base_tag}_twist{node_suffix}_SLERP")
+            _set_quaternion(quat_slerp + ".input1Quat", (0.0, 0.0, 0.0, 1.0))
+            _connect_quaternion(roll_quat_prefix, quat_slerp + ".input2Quat")
+            cmds.connectAttr(j + "." + ratio_attr, quat_slerp + ".inputT", f=True)
+
+            quat_to_euler = cmds.createNode("quatToEuler", n=f"{base_tag}_twist{node_suffix}_QTE")
+            _connect_quaternion(quat_slerp + ".outputQuat", quat_to_euler + ".inputQuat")
+            try:
+                rotate_order = cmds.getAttr(j + ".rotateOrder")
+                cmds.setAttr(quat_to_euler + ".inputRotateOrder", rotate_order)
+            except Exception:
+                pass
+
+            for ax in _AXES:
+                cmds.connectAttr(quat_to_euler + ".outputRotate" + ax, j + ".rotate" + ax, f=True)
+                try:
+                    cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
+                except Exception:
+                    pass
+        else:
+            md = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_MD")
+            cmds.connectAttr(pma_sub + ".output1D", md + ".input1", f=True)
+
+            pma_add = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twist{node_suffix}_PMA")
+            cmds.setAttr(pma_add + ".operation", 1)
+            cmds.connectAttr(start + driver_rotate_attr, pma_add + ".input1D[0]", f=True)
+            cmds.connectAttr(md + ".output", pma_add + ".input1D[1]", f=True)
+
+            axis_sign_md = cmds.createNode(
+                "multDoubleLinear", n=f"{base_tag}_twist{node_suffix}_axis_MD"
+            )
+            cmds.setAttr(axis_sign_md + ".input2", twist_axis_sign)
+            cmds.connectAttr(pma_add + ".output1D", axis_sign_md + ".input1", f=True)
+            cmds.connectAttr(axis_sign_md + ".output", j + twist_rotate_attr, f=True)
+            for ax in other_axes:
+                cmds.setAttr(j + ".rotate" + ax, l=True, k=False, cb=False)
+
+            cmds.connectAttr(j + "." + ratio_attr, md + ".input2", f=True)
 
         scale_factor = float(step_index)
         scale_ratio = (scale_at_90 - 1) * scale_factor / float(count) + 1 if count else 1.0
@@ -490,6 +603,7 @@ def _create_twist_chain_internal(
     twist_axis: str = "X",
     driver_axis: Optional[str] = None,
     twist_axis_sign: int = 1,
+    use_matrix_twist: bool = False,
 ) -> List[str]:
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis or twist_axis)
@@ -537,6 +651,12 @@ def _create_twist_chain_internal(
     start_parent = cmds.listRelatives(start, p=True, pa=True) or []
     start_parent = start_parent[0] if start_parent else None
 
+    if reverse_twist and use_matrix_twist:
+        cmds.warning(
+            "Matrix-based twist is not supported with reverse twist; falling back to the legacy setup."
+        )
+        use_matrix_twist = False
+
     if reverse_twist:
         created = _create_reverse_twist_chain(
             start=start,
@@ -564,6 +684,7 @@ def _create_twist_chain_internal(
             twist_axis=twist_axis,
             driver_axis=driver_axis,
             twist_axis_sign=twist_axis_sign,
+            use_matrix_twist=use_matrix_twist,
         )
 
     if manage_display_layer and created:
@@ -605,6 +726,7 @@ def create_twist_chain(
     reverse_twist=False,
     twist_axis="X",
     driver_axis=None,
+    use_matrix_twist=False,
 ):
     """Create a twist chain for the first selected joint.
 
@@ -622,6 +744,9 @@ def create_twist_chain(
         driver_axis: Axis from the target joint that will be sampled to drive
             the twist computation. When ``None`` the value of ``twist_axis`` is
             used.
+        use_matrix_twist: When ``True`` the twist rotation is extracted using
+            a matrix/quaternion based workflow that isolates bend rotation
+            before distributing the remaining roll.
     """
 
     sel = cmds.ls(sl=True, type="joint") or []
@@ -647,6 +772,7 @@ def create_twist_chain(
             twist_axis=normalized_twist_axis,
             driver_axis=normalized_driver_axis,
             twist_axis_sign=twist_axis_sign,
+            use_matrix_twist=use_matrix_twist,
         )
     finally:
         cmds.undoInfo(closeChunk=True)
@@ -674,6 +800,7 @@ def create_twist_chain_for_joint(
     use_undo_chunk: bool = True,
     twist_axis: str = "X",
     driver_axis: Optional[str] = None,
+    use_matrix_twist: bool = False,
 ) -> List[str]:
     normalized_twist_axis, twist_axis_sign = _normalize_twist_axis_with_sign(twist_axis)
     normalized_driver_axis = (
@@ -693,6 +820,7 @@ def create_twist_chain_for_joint(
             twist_axis=normalized_twist_axis,
             driver_axis=normalized_driver_axis,
             twist_axis_sign=twist_axis_sign,
+            use_matrix_twist=use_matrix_twist,
         )
     finally:
         if use_undo_chunk:
