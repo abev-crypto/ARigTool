@@ -76,6 +76,7 @@ class TwistChainDialog(QtWidgets.QDialog):
 
         self._create_widgets()
         self._create_layout()
+        self._on_reverse_toggled(self.reverse_checkbox.isChecked())
 
     def _create_widgets(self):
         self.label = QtWidgets.QLabel(u"生成する補助ジョイントの数:")
@@ -105,6 +106,10 @@ class TwistChainDialog(QtWidgets.QDialog):
         )
 
         self.reverse_checkbox = QtWidgets.QCheckBox(u"逆ツイストを有効にする")
+        self.matrix_checkbox = QtWidgets.QCheckBox(u"行列ベースのツイストを使用")
+        self.matrix_checkbox.setToolTip(
+            u"ベンド成分をクォータニオンで除去し、残りのロールのみを配分します。逆ツイストでは使用できません。"
+        )
 
         self.create_button = QtWidgets.QPushButton(u"Create")
         self.close_button = QtWidgets.QPushButton(u"Close")
@@ -113,6 +118,7 @@ class TwistChainDialog(QtWidgets.QDialog):
 
         self.create_button.clicked.connect(self._on_create_clicked)
         self.close_button.clicked.connect(self.close)
+        self.reverse_checkbox.toggled.connect(self._on_reverse_toggled)
 
     def _create_layout(self):
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -122,6 +128,7 @@ class TwistChainDialog(QtWidgets.QDialog):
         form_layout.addRow(self.axis_label, self.axis_combo)
         form_layout.addRow(self.driver_axis_label, self.driver_axis_combo)
         form_layout.addRow("", self.reverse_checkbox)
+        form_layout.addRow("", self.matrix_checkbox)
         main_layout.addLayout(form_layout)
 
         button_layout = QtWidgets.QHBoxLayout()
@@ -136,6 +143,7 @@ class TwistChainDialog(QtWidgets.QDialog):
         reverse_enabled = self.reverse_checkbox.isChecked()
         axis = self.axis_combo.currentText()
         driver_axis = self.driver_axis_combo.currentText()
+        use_matrix = self.matrix_checkbox.isChecked()
 
         def _callback():
             _call_module_function(
@@ -146,9 +154,15 @@ class TwistChainDialog(QtWidgets.QDialog):
                 reverse_twist=reverse_enabled,
                 twist_axis=axis,
                 driver_axis=driver_axis,
+                use_matrix_twist=use_matrix,
             )
 
         _run_with_warning(_callback)
+
+    def _on_reverse_toggled(self, enabled):
+        if enabled:
+            self.matrix_checkbox.setChecked(False)
+        self.matrix_checkbox.setEnabled(not enabled)
 
     def closeEvent(self, event):
         super(TwistChainDialog, self).closeEvent(event)
