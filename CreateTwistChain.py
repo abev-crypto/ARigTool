@@ -78,6 +78,18 @@ def _connect_quaternion(src_prefix: str, dst_prefix: str) -> None:
         cmds.connectAttr(src_prefix + suffix, dst_prefix + suffix, f=True)
 
 
+def _axis_angle_attributes(node: str) -> Tuple[str, str]:
+    axis_prefix = ".axis"
+    if not cmds.attributeQuery("axisX", node=node, exists=True):
+        axis_prefix = ".inputAxis"
+
+    angle_attr = ".angle"
+    if not cmds.attributeQuery("angle", node=node, exists=True):
+        angle_attr = ".inputAngle"
+
+    return axis_prefix, angle_attr
+
+
 def _set_quaternion(attr_prefix: str, values: Tuple[float, float, float, float]) -> None:
     for suffix, value in zip(("X", "Y", "Z", "W"), values):
         cmds.setAttr(attr_prefix + suffix, value)
@@ -291,14 +303,7 @@ def _create_standard_twist_chain(
             )
 
         axis_angle = cmds.createNode("axisAngleToQuat", n=f"{base_tag}_twistBend_AATQ")
-
-        axis_prefix = ".axis"
-        if not cmds.attributeQuery("axisX", node=axis_angle, exists=True):
-            axis_prefix = ".inputAxis"
-
-        angle_attr = ".angle"
-        if not cmds.attributeQuery("angle", node=axis_angle, exists=True):
-            angle_attr = ".inputAngle"
+        axis_prefix, angle_attr = _axis_angle_attributes(axis_angle)
 
         for ax in _AXES:
             cmds.connectAttr(
@@ -332,6 +337,73 @@ def _create_standard_twist_chain(
         _connect_quaternion(quat_invert_bend + ".outputQuat", quat_prod + ".input2Quat")
 
         roll_quat_prefix = quat_prod + ".outputQuat"
+
+        swing_axes = tuple(ax for ax in _AXES if ax != driver_axis)
+        if swing_axes:
+            swing_angle_sum = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistSwing_PMA")
+            cmds.setAttr(swing_angle_sum + ".operation", 1)
+
+            for idx, swing_axis in enumerate(swing_axes):
+                weight_attr = f"matrixSwing{swing_axis}Weight"
+                if not cmds.attributeQuery(weight_attr, node=compose_rot, exists=True):
+                    cmds.addAttr(
+                        compose_rot,
+                        ln=weight_attr,
+                        at="double",
+                        dv=1.0,
+                        k=True,
+                    )
+
+                weight_node = cmds.createNode(
+                    "multDoubleLinear",
+                    n=f"{base_tag}_twistSwing{swing_axis}_Weight_MDL",
+                )
+                cmds.connectAttr(
+                    angle_between + ".angle",
+                    weight_node + ".input1",
+                    f=True,
+                )
+                cmds.connectAttr(
+                    compose_rot + f".{weight_attr}",
+                    weight_node + ".input2",
+                    f=True,
+                )
+
+                signed_node = cmds.createNode(
+                    "multDoubleLinear",
+                    n=f"{base_tag}_twistSwing{swing_axis}_Signed_MDL",
+                )
+                cmds.connectAttr(weight_node + ".output", signed_node + ".input1", f=True)
+                cmds.connectAttr(
+                    angle_between + f".axis{swing_axis}",
+                    signed_node + ".input2",
+                    f=True,
+                )
+                cmds.connectAttr(
+                    signed_node + ".output",
+                    swing_angle_sum + f".input1D[{idx}]",
+                    f=True,
+                )
+
+            swing_twist_quat = cmds.createNode(
+                "axisAngleToQuat",
+                n=f"{base_tag}_twistSwingTwist_AATQ",
+            )
+            swing_axis_prefix, swing_angle_attr = _axis_angle_attributes(swing_twist_quat)
+            twist_axis_vector = _axis_to_vector(twist_axis)
+            for axis_name, value in zip(_AXES, twist_axis_vector):
+                cmds.setAttr(swing_twist_quat + swing_axis_prefix + axis_name, value)
+            cmds.connectAttr(
+                swing_angle_sum + ".output1D",
+                swing_twist_quat + swing_angle_attr,
+                f=True,
+            )
+
+            combined_quat = cmds.createNode("quatProd", n=f"{base_tag}_twistCombined_QP")
+            _connect_quaternion(roll_quat_prefix, combined_quat + ".input1Quat")
+            _connect_quaternion(swing_twist_quat + ".outputQuat", combined_quat + ".input2Quat")
+            roll_quat_prefix = combined_quat + ".outputQuat"
+
         if twist_axis_sign < 0:
             roll_invert = cmds.createNode("quatInvert", n=f"{base_tag}_twistRollSign_INV")
             _connect_quaternion(roll_quat_prefix, roll_invert + ".inputQuat")
