@@ -263,9 +263,14 @@ def _create_standard_twist_chain(
             cmds.setAttr(compose_axis + ".inputTranslate" + axis_name, value)
 
         compose_rot = cmds.createNode("composeMatrix", n=f"{base_tag}_twistRotate_CM")
+        twist_target = ref if cmds.objExists(ref) else start
         for ax in _AXES:
             try:
-                cmds.connectAttr(start + ".rotate" + ax, compose_rot + ".inputRotate" + ax, f=True)
+                cmds.connectAttr(
+                    twist_target + ".rotate" + ax,
+                    compose_rot + ".inputRotate" + ax,
+                    f=True,
+                )
             except Exception:
                 pass
 
