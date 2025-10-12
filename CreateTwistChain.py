@@ -267,7 +267,7 @@ def _create_standard_twist_chain(
     cmds.setAttr(twist_range + ".oldMaxX", 90)
     cmds.connectAttr(cond_abs + ".outColorR", twist_range + ".valueX", f=True)
 
-    roll_quat_prefix: Optional[str] = None
+    twist_quat_prefix: Optional[str] = None
     if use_matrix_twist:
         axis_vector = _axis_to_vector(driver_axis)
         compose_axis = cmds.createNode("composeMatrix", n=f"{base_tag}_twistAxis_CM")
@@ -336,14 +336,28 @@ def _create_standard_twist_chain(
         _connect_quaternion(euler_to_quat + ".outputQuat", quat_prod + ".input1Quat")
         _connect_quaternion(quat_invert_bend + ".outputQuat", quat_prod + ".input2Quat")
 
-        roll_quat_prefix = quat_prod + ".outputQuat"
+        twist_quat_prefix = quat_prod + ".outputQuat"
 
         swing_axes = tuple(ax for ax in _AXES if ax != driver_axis)
-        if swing_axes:
-            swing_angle_sum = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistSwing_PMA")
-            cmds.setAttr(swing_angle_sum + ".operation", 1)
+        swing_axis_set = set(swing_axes)
+        if driver_axis in ("Y", "Z"):
+            swing_axis_set.add(driver_axis)
 
-            for idx, swing_axis in enumerate(swing_axes):
+        swing_signed_outputs: Dict[str, str] = {}
+        swing_twist_quat = None
+        swing_angle_attr: Optional[str] = None
+
+        if swing_axis_set:
+            swing_twist_quat = cmds.createNode(
+                "axisAngleToQuat",
+                n=f"{base_tag}_twistSwingTwist_AATQ",
+            )
+            swing_axis_prefix, swing_angle_attr = _axis_angle_attributes(swing_twist_quat)
+            twist_axis_vector = _axis_to_vector(twist_axis)
+            for axis_name, value in zip(_AXES, twist_axis_vector):
+                cmds.setAttr(swing_twist_quat + swing_axis_prefix + axis_name, value)
+
+            for swing_axis in sorted(swing_axis_set):
                 weight_attr = f"matrixSwing{swing_axis}Weight"
                 if not cmds.attributeQuery(weight_attr, node=compose_rot, exists=True):
                     cmds.addAttr(
@@ -379,35 +393,26 @@ def _create_standard_twist_chain(
                     signed_node + ".input2",
                     f=True,
                 )
+
+                swing_signed_outputs[swing_axis] = signed_node + ".output"
+
+            if (
+                driver_axis in swing_signed_outputs
+                and driver_axis != "X"
+                and swing_twist_quat is not None
+                and swing_angle_attr is not None
+            ):
                 cmds.connectAttr(
-                    signed_node + ".output",
-                    swing_angle_sum + f".input1D[{idx}]",
+                    swing_signed_outputs[driver_axis],
+                    swing_twist_quat + swing_angle_attr,
                     f=True,
                 )
-
-            swing_twist_quat = cmds.createNode(
-                "axisAngleToQuat",
-                n=f"{base_tag}_twistSwingTwist_AATQ",
-            )
-            swing_axis_prefix, swing_angle_attr = _axis_angle_attributes(swing_twist_quat)
-            twist_axis_vector = _axis_to_vector(twist_axis)
-            for axis_name, value in zip(_AXES, twist_axis_vector):
-                cmds.setAttr(swing_twist_quat + swing_axis_prefix + axis_name, value)
-            cmds.connectAttr(
-                swing_angle_sum + ".output1D",
-                swing_twist_quat + swing_angle_attr,
-                f=True,
-            )
-
-            combined_quat = cmds.createNode("quatProd", n=f"{base_tag}_twistCombined_QP")
-            _connect_quaternion(roll_quat_prefix, combined_quat + ".input1Quat")
-            _connect_quaternion(swing_twist_quat + ".outputQuat", combined_quat + ".input2Quat")
-            roll_quat_prefix = combined_quat + ".outputQuat"
+                twist_quat_prefix = swing_twist_quat + ".outputQuat"
 
         if twist_axis_sign < 0:
             roll_invert = cmds.createNode("quatInvert", n=f"{base_tag}_twistRollSign_INV")
-            _connect_quaternion(roll_quat_prefix, roll_invert + ".inputQuat")
-            roll_quat_prefix = roll_invert + ".outputQuat"
+            _connect_quaternion(twist_quat_prefix, roll_invert + ".inputQuat")
+            twist_quat_prefix = roll_invert + ".outputQuat"
 
     created = []
     for idx in range(count):
@@ -454,7 +459,7 @@ def _create_standard_twist_chain(
         cmds.setAttr(j + "." + ratio_attr, ratio)
 
         if use_matrix_twist:
-            if roll_quat_prefix is None:
+            if twist_quat_prefix is None:
                 raise RuntimeError("Matrix-based twist setup is not available.")
 
             for ax in _AXES:
@@ -465,7 +470,7 @@ def _create_standard_twist_chain(
 
             quat_slerp = cmds.createNode("quatSlerp", n=f"{base_tag}_twist{node_suffix}_SLERP")
             _set_quaternion(quat_slerp + ".input1Quat", (0.0, 0.0, 0.0, 1.0))
-            _connect_quaternion(roll_quat_prefix, quat_slerp + ".input2Quat")
+            _connect_quaternion(twist_quat_prefix, quat_slerp + ".input2Quat")
             cmds.connectAttr(j + "." + ratio_attr, quat_slerp + ".inputT", f=True)
 
             quat_to_euler = cmds.createNode("quatToEuler", n=f"{base_tag}_twist{node_suffix}_QTE")
