@@ -276,9 +276,22 @@ def _create_standard_twist_chain(
             )
 
         axis_angle = cmds.createNode("axisAngleToQuat", n=f"{base_tag}_twistBend_AATQ")
+
+        axis_prefix = ".axis"
+        if not cmds.attributeQuery("axisX", node=axis_angle, exists=True):
+            axis_prefix = ".inputAxis"
+
+        angle_attr = ".angle"
+        if not cmds.attributeQuery("angle", node=axis_angle, exists=True):
+            angle_attr = ".inputAngle"
+
         for ax in _AXES:
-            cmds.connectAttr(angle_between + ".axis" + ax, axis_angle + ".axis" + ax, f=True)
-        cmds.connectAttr(angle_between + ".angle", axis_angle + ".angle", f=True)
+            cmds.connectAttr(
+                angle_between + ".axis" + ax,
+                axis_angle + axis_prefix + ax,
+                f=True,
+            )
+        cmds.connectAttr(angle_between + ".angle", axis_angle + angle_attr, f=True)
 
         quat_invert_bend = cmds.createNode("quatInvert", n=f"{base_tag}_twistBend_INV")
         _connect_quaternion(axis_angle + ".outputQuat", quat_invert_bend + ".inputQuat")
