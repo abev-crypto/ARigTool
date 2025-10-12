@@ -52,6 +52,16 @@ _AXES: Tuple[str, ...] = ("X", "Y", "Z")
 _AXES_WITH_SIGN: Tuple[str, ...] = ("X", "Y", "Z", "-X", "-Y", "-Z")
 
 
+def _as_bool(value: object) -> bool:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off", ""):
+            return False
+    return bool(value)
+
+
 def _axis_to_vector(axis: str) -> Tuple[float, float, float]:
     normalized = _normalize_twist_axis(axis)
     if normalized == "X":
@@ -618,6 +628,8 @@ def _create_twist_chain_internal(
     twist_axis_sign: int = 1,
     use_matrix_twist: bool = False,
 ) -> List[str]:
+    reverse_twist = _as_bool(reverse_twist)
+    use_matrix_twist = _as_bool(use_matrix_twist)
     twist_axis = _normalize_twist_axis(twist_axis)
     driver_axis = _normalize_twist_axis(driver_axis or twist_axis)
 
@@ -959,7 +971,7 @@ def build_twist_chain_from_data(
     scales: Sequence[float] = data.get("scales") or []
     scale_at_90 = scales[-1] if scales else 1.0
     twist_count = int(data.get("count", joint_count))
-    reverse_twist = bool(data.get("reverse_twist", False))
+    reverse_twist = _as_bool(data.get("reverse_twist", False))
     twist_axis = data.get("twist_axis", "X")
     driver_axis = data.get("driver_axis") or twist_axis
 
@@ -1281,7 +1293,7 @@ if QtWidgets is not None:
                 self.driver_axis_combo.setCurrentIndex(driver_index)
 
                 self._current_base_joint = base_joint
-                self._current_reverse_twist = bool(reverse_twist)
+                self._current_reverse_twist = _as_bool(reverse_twist)
                 self._current_twist_axis = display_twist_axis
                 self._current_driver_axis = normalized_driver_axis
             else:
