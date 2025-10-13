@@ -115,13 +115,23 @@ def _create_half_rotation_joint_internal(
         cmds.setAttr(half + ".radius", max(0.01, src_rad * 2.0))
     except Exception:
         pass
-    md_name = _uniquify("md_%s_half" % base)
-    md = cmds.createNode("multiplyDivide", n=md_name)
-    cmds.setAttr(md + ".operation", 1)
-    if not skip_rotate_x:
-        cmds.setAttr(md + ".input2X", 0.5)
-    cmds.setAttr(md + ".input2Y", 0.5)
-    cmds.setAttr(md + ".input2Z", 0.5)
+    etq_name = _uniquify("etq_%s_half" % base)
+    etq = cmds.createNode("eulerToQuat", n=etq_name)
+    qsl_name = _uniquify("qsl_%s_half" % base)
+    qsl = cmds.createNode("quatSlerp", n=qsl_name)
+    qte_name = _uniquify("qte_%s_half" % base)
+    qte = cmds.createNode("quatToEuler", n=qte_name)
+    try:
+        for axis, value in zip(("X", "Y", "Z", "W"), (0, 0, 0, 1)):
+            cmds.setAttr(qsl + f".inputQuat2{axis}", value)
+        cmds.setAttr(qsl + ".t", 0.5)
+    except Exception:
+        pass
+    for axis in ("X", "Y", "Z"):
+        cmds.connectAttr(base_joint + f".rotate{axis}", etq + f".inputRotate{axis}", f=True)
+    for axis in ("X", "Y", "Z", "W"):
+        cmds.connectAttr(etq + f".outputQuat{axis}", qsl + f".inputQuat1{axis}", f=True)
+        cmds.connectAttr(qsl + f".outputQuat{axis}", qte + f".inputQuat{axis}", f=True)
     for ax in ("X", "Y", "Z"):
         dst_plug = f"{half}.rotate{ax}"
         cons = cmds.listConnections(dst_plug, s=True, d=False, p=True) or []
@@ -130,18 +140,21 @@ def _create_half_rotation_joint_internal(
                 cmds.disconnectAttr(c, dst_plug)
             except Exception:
                 pass
-    if skip_rotate_x:
+    if not skip_rotate_x:
+        try:
+            cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
+        except Exception:
+            pass
+    else:
         try:
             cmds.setAttr(half + ".rotateX", 0)
         except Exception:
             pass
-    else:
-        cmds.connectAttr(base_joint + ".rotateX", md + ".input1X", f=True)
-        cmds.connectAttr(md + ".outputX", half + ".rotateX", f=True)
-    cmds.connectAttr(base_joint + ".rotateY", md + ".input1Y", f=True)
-    cmds.connectAttr(base_joint + ".rotateZ", md + ".input1Z", f=True)
-    cmds.connectAttr(md + ".outputY", half + ".rotateY", f=True)
-    cmds.connectAttr(md + ".outputZ", half + ".rotateZ", f=True)
+    for axis in ("Y", "Z"):
+        try:
+            cmds.connectAttr(qte + f".outputRotate{axis}", half + f".rotate{axis}", f=True)
+        except Exception:
+            pass
     inf_name = _uniquify(base + "_Half_INF")
     cmds.select(clear=True)
     inf = cmds.joint(n=inf_name)
@@ -162,7 +175,15 @@ def _create_half_rotation_joint_internal(
             cmds.editDisplayLayerMembers(layer, [half, inf], noRecurse=True)
         except Exception:
             pass
-    return {"half": half, "influences": [inf], "mult_node": md}
+    return {
+        "half": half,
+        "influences": [inf],
+        "nodes": {
+            "eulerToQuat": etq,
+            "quatSlerp": qsl,
+            "quatToEuler": qte,
+        },
+    }
 def create_half_rotation_joint(skip_rotate_x=None):
     if skip_rotate_x is None:
         skip_rotate_x = _get_skip_rotate_x_preference()
