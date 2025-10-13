@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import maya.cmds as cmds
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 try:  # pragma: no cover - Maya環墁EではUI関連モジュールが利用できなぁE合がある
     from PySide2 import QtCore, QtWidgets
     from shiboken2 import wrapInstance
@@ -9,6 +9,9 @@ except Exception:  # pragma: no cover - Maya環墁EではUI関連モジュール
     QtCore = QtWidgets = omui = wrapInstance = None
 LAYER_NAME = "halfrot_jnt"
 OPTIONVAR_SKIP_ROTATE_X = "ARigTool_SkipHalfRotateX"
+OPTIONVAR_CONNECT_AXES = "ARigTool_HalfRotateAxes"
+_VALID_ROTATE_AXES: Tuple[str, ...] = ("X", "Y", "Z")
+_DEFAULT_CONNECT_AXES: Tuple[str, ...] = _VALID_ROTATE_AXES
 _half_rotation_dialog = None
 def _strip_duplicate_suffix(name):
     if name.endswith("_D"):
@@ -44,6 +47,8 @@ def _ensure_display_layer(name):
     if not cmds.objExists(name) or cmds.nodeType(name) != "displayLayer":
         return cmds.createDisplayLayer(name=name, empty=True)
     return name
+
+
 def _maya_main_window():
     if omui is None:
         raise RuntimeError("Unable to obtain Maya main window.")
@@ -51,12 +56,62 @@ def _maya_main_window():
     if ptr is None:
         raise RuntimeError("Unable to obtain Maya main window.")
     return wrapInstance(int(ptr), QtWidgets.QWidget)
-def _get_skip_rotate_x_preference():
+
+
+def _normalize_connect_axes(axes: Optional[Sequence[str]]) -> Tuple[str, ...]:
+    if axes is None:
+        return _DEFAULT_CONNECT_AXES
+
+    if isinstance(axes, str):
+        raw_axes = list(axes)
+    else:
+        raw_axes = list(axes)
+
+    normalized: List[str] = []
+    for axis in raw_axes:
+        axis_str = str(axis).strip().upper()
+        if axis_str in _VALID_ROTATE_AXES and axis_str not in normalized:
+            normalized.append(axis_str)
+
+    if not normalized:
+        return _DEFAULT_CONNECT_AXES
+
+    return tuple(normalized)
+
+
+def _axes_from_skip(skip_rotate_x: bool) -> Tuple[str, ...]:
+    if skip_rotate_x:
+        return tuple(axis for axis in _VALID_ROTATE_AXES if axis != "X") or _DEFAULT_CONNECT_AXES
+    return _DEFAULT_CONNECT_AXES
+
+
+def _get_connect_axes_preference() -> Tuple[str, ...]:
+    if cmds.optionVar(exists=OPTIONVAR_CONNECT_AXES):
+        raw_value = cmds.optionVar(q=OPTIONVAR_CONNECT_AXES)
+        normalized = _normalize_connect_axes(raw_value)
+        if normalized:
+            return normalized
+
     if cmds.optionVar(exists=OPTIONVAR_SKIP_ROTATE_X):
-        return bool(cmds.optionVar(q=OPTIONVAR_SKIP_ROTATE_X))
-    return False
+        skip = bool(cmds.optionVar(q=OPTIONVAR_SKIP_ROTATE_X))
+        return _axes_from_skip(skip)
+
+    return _DEFAULT_CONNECT_AXES
+
+
+def _set_connect_axes_preference(axes: Sequence[str]) -> Tuple[str, ...]:
+    normalized = _normalize_connect_axes(axes)
+    cmds.optionVar(sv=(OPTIONVAR_CONNECT_AXES, "".join(normalized)))
+    cmds.optionVar(iv=(OPTIONVAR_SKIP_ROTATE_X, int("X" not in normalized)))
+    return normalized
+
+
+def _get_skip_rotate_x_preference():
+    return "X" not in _get_connect_axes_preference()
+
+
 def _set_skip_rotate_x_preference(enabled):
-    cmds.optionVar(iv=(OPTIONVAR_SKIP_ROTATE_X, int(bool(enabled))))
+    _set_connect_axes_preference(_axes_from_skip(bool(enabled)))
 ANIM_CURVE_TYPES: Sequence[str] = (
     "animCurveUL",
     "animCurveUA",
@@ -79,15 +134,38 @@ def _list_driven_attributes(node):
         for plug in outputs:
             attrs.append(plug.split(".", 1)[1])
     return sorted(set(attrs))
+
+
+def _detect_connected_axes(half_joint: str) -> List[str]:
+    connected_axes: List[str] = []
+    for axis in _VALID_ROTATE_AXES:
+        dst_plug = f"{half_joint}.rotate{axis}"
+        connections = cmds.listConnections(dst_plug, s=True, d=False, p=True) or []
+        for source in connections:
+            node, attr = source.split(".", 1)
+            if cmds.nodeType(node) == "quatToEuler" and attr == f"outputRotate{axis}":
+                connected_axes.append(axis)
+                break
+    if not connected_axes:
+        return list(_get_connect_axes_preference())
+    return connected_axes
 def _create_half_rotation_joint_internal(
     base_joint: str,
     *,
-    skip_rotate_x: bool,
+    connect_axes: Optional[Sequence[str]] = None,
+    skip_rotate_x: Optional[bool] = None,
     layer: Optional[str] = None,
 ) -> Optional[Dict[str, object]]:
     if not cmds.objExists(base_joint):
         cmds.warning("Joint {0} was not found.".format(base_joint))
         return None
+    if connect_axes is not None:
+        axes_to_connect = _normalize_connect_axes(connect_axes)
+    elif skip_rotate_x is not None:
+        axes_to_connect = _normalize_connect_axes(_axes_from_skip(bool(skip_rotate_x)))
+    else:
+        axes_to_connect = _get_connect_axes_preference()
+    axis_set = set(axes_to_connect)
     base = _strip_duplicate_suffix(base_joint.split("|")[-1])
     if _has_half_joint(base_joint):
         cmds.warning("Half joint already exists for {0}; skipping.".format(base_joint))
@@ -137,16 +215,13 @@ def _create_half_rotation_joint_internal(
                 cmds.disconnectAttr(c, dst_plug)
             except Exception:
                 pass
-    if not skip_rotate_x:
-
-        cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
-    else:
+    for axis in _VALID_ROTATE_AXES:
+        if axis not in axis_set:
+            continue
         try:
-            cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
+            cmds.connectAttr(qte + f".outputRotate{axis}", half + f".rotate{axis}", f=True)
         except Exception:
             pass
-    for axis in ("Y", "Z"):
-        cmds.connectAttr(qte + f".outputRotate{axis}", half + f".rotate{axis}", f=True)
     inf_name = _uniquify(base + "_Half_INF")
     cmds.select(clear=True)
     inf = cmds.joint(n=inf_name)
@@ -175,10 +250,15 @@ def _create_half_rotation_joint_internal(
             "quatSlerp": qsl,
             "quatToEuler": qte,
         },
+        "connectAxes": list(axes_to_connect),
     }
-def create_half_rotation_joint(skip_rotate_x=None):
-    if skip_rotate_x is None:
-        skip_rotate_x = _get_skip_rotate_x_preference()
+def create_half_rotation_joint(connect_axes=None, skip_rotate_x=None):
+    if connect_axes is not None:
+        axes = _normalize_connect_axes(connect_axes)
+    elif skip_rotate_x is not None:
+        axes = _normalize_connect_axes(_axes_from_skip(bool(skip_rotate_x)))
+    else:
+        axes = _get_connect_axes_preference()
     sel = cmds.ls(sl=True, type="joint") or []
     if not sel:
         cmds.warning("Select at least one joint.")
@@ -188,7 +268,11 @@ def create_half_rotation_joint(skip_rotate_x=None):
     created = []
     try:
         for joint in sel:
-            result = _create_half_rotation_joint_internal(joint, skip_rotate_x=skip_rotate_x, layer=layer)
+            result = _create_half_rotation_joint_internal(
+                joint,
+                connect_axes=axes,
+                layer=layer,
+            )
             if not result:
                 continue
             half = result.get("half")
@@ -263,6 +347,7 @@ def collect_half_joint_data(start: str) -> Optional[List[Dict[str, object]]]:
                 "name": half,
                 "rotateOrder": rotate_order,
                 "radius": half_radius,
+                "connectAxes": _detect_connected_axes(half),
                 "infs": inf_infos,
             }
         )
@@ -278,6 +363,7 @@ def build_half_chain_from_data(
     name_mapper: Optional[Callable[[str], Optional[str]]] = None,
     position_mapper: Optional[Callable[[Sequence[float]], Sequence[float]]] = None,
     copy_driven_callback: Optional[Callable[[str, str, Sequence[str]], None]] = None,
+    connect_axes: Optional[Sequence[str]] = None,
     skip_rotate_x: Optional[bool] = None,
     select_result: bool = False,
     show_message: bool = False,
@@ -287,15 +373,21 @@ def build_half_chain_from_data(
         return []
     if not data:
         return []
-    if skip_rotate_x is None:
-        skip_rotate_x = _get_skip_rotate_x_preference()
+    if connect_axes is not None:
+        base_axes = _normalize_connect_axes(connect_axes)
+    elif skip_rotate_x is not None:
+        base_axes = _normalize_connect_axes(_axes_from_skip(bool(skip_rotate_x)))
+    else:
+        base_axes = _get_connect_axes_preference()
     cleanup_half_joints(target_start)
     layer = _ensure_display_layer(LAYER_NAME)
     created_halves: List[str] = []
     for info in data:
+        info_axes = info.get("connectAxes") if isinstance(info, dict) else None
+        axes_for_half = _normalize_connect_axes(info_axes if info_axes else base_axes)
         result = _create_half_rotation_joint_internal(
             target_start,
-            skip_rotate_x=bool(skip_rotate_x),
+            connect_axes=axes_for_half,
             layer=layer,
         )
         if not result:
@@ -389,24 +481,36 @@ if QtWidgets is not None:  # pragma: no cover - Maya環墁Eのみ利用
             self._create_widgets()
             self._create_layout()
         def _create_widgets(self):
-            self.skip_x_checkbox = QtWidgets.QCheckBox("Skip connecting rotate X")
-            self.skip_x_checkbox.setChecked(_get_skip_rotate_x_preference())
+            axes_pref = _get_connect_axes_preference()
+            self.axis_group = QtWidgets.QGroupBox("Connect rotate axes")
+            axis_layout = QtWidgets.QHBoxLayout()
+            self.axis_checkboxes: Dict[str, QtWidgets.QCheckBox] = {}
+            for axis in _VALID_ROTATE_AXES:
+                checkbox = QtWidgets.QCheckBox(f"Rotate {axis}")
+                checkbox.setChecked(axis in axes_pref)
+                axis_layout.addWidget(checkbox)
+                self.axis_checkboxes[axis] = checkbox
+            axis_layout.addStretch(1)
+            self.axis_group.setLayout(axis_layout)
             self.create_button = QtWidgets.QPushButton("Create")
             self.close_button = QtWidgets.QPushButton("Close")
             self.create_button.clicked.connect(self._on_create_clicked)
             self.close_button.clicked.connect(self.close)
         def _create_layout(self):
             main_layout = QtWidgets.QVBoxLayout(self)
-            main_layout.addWidget(self.skip_x_checkbox)
+            main_layout.addWidget(self.axis_group)
             button_layout = QtWidgets.QHBoxLayout()
             button_layout.addStretch(1)
             button_layout.addWidget(self.create_button)
             button_layout.addWidget(self.close_button)
             main_layout.addLayout(button_layout)
         def _on_create_clicked(self):
-            enabled = self.skip_x_checkbox.isChecked()
-            _set_skip_rotate_x_preference(enabled)
-            create_half_rotation_joint(skip_rotate_x=enabled)
+            selected_axes = [axis for axis, cb in self.axis_checkboxes.items() if cb.isChecked()]
+            if not selected_axes:
+                cmds.warning("Select at least one axis to connect.")
+                return
+            normalized = _set_connect_axes_preference(selected_axes)
+            create_half_rotation_joint(connect_axes=normalized)
         def closeEvent(self, event):
             super(HalfRotationDialog, self).closeEvent(event)
             global _half_rotation_dialog
