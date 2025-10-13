@@ -121,12 +121,9 @@ def _create_half_rotation_joint_internal(
     qsl = cmds.createNode("quatSlerp", n=qsl_name)
     qte_name = _uniquify("qte_%s_half" % base)
     qte = cmds.createNode("quatToEuler", n=qte_name)
-    try:
-        for axis, value in zip(("X", "Y", "Z", "W"), (0, 0, 0, 1)):
-            cmds.setAttr(qsl + f".inputQuat2{axis}", value)
-        cmds.setAttr(qsl + ".t", 0.5)
-    except Exception:
-        pass
+    for axis, value in zip(("X", "Y", "Z", "W"), (0, 0, 0, 1)):
+        cmds.setAttr(qsl + f".inputQuat2{axis}", value)
+    cmds.setAttr(qsl + ".t", 0.5)
     for axis in ("X", "Y", "Z"):
         cmds.connectAttr(base_joint + f".rotate{axis}", etq + f".inputRotate{axis}", f=True)
     for axis in ("X", "Y", "Z", "W"):
@@ -141,20 +138,15 @@ def _create_half_rotation_joint_internal(
             except Exception:
                 pass
     if not skip_rotate_x:
+
+        cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
+    else:
         try:
             cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
         except Exception:
             pass
-    else:
-        try:
-            cmds.setAttr(half + ".rotateX", 0)
-        except Exception:
-            pass
     for axis in ("Y", "Z"):
-        try:
-            cmds.connectAttr(qte + f".outputRotate{axis}", half + f".rotate{axis}", f=True)
-        except Exception:
-            pass
+        cmds.connectAttr(qte + f".outputRotate{axis}", half + f".rotate{axis}", f=True)
     inf_name = _uniquify(base + "_Half_INF")
     cmds.select(clear=True)
     inf = cmds.joint(n=inf_name)
