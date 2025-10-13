@@ -138,10 +138,11 @@ def _create_half_rotation_joint_internal(
             except Exception:
                 pass
     if not skip_rotate_x:
+
         cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
     else:
         try:
-            cmds.setAttr(half + ".rotateX", 0)
+            cmds.connectAttr(qte + ".outputRotateX", half + ".rotateX", f=True)
         except Exception:
             pass
     for axis in ("Y", "Z"):
