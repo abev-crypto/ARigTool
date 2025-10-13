@@ -52,6 +52,22 @@ _AXES: Tuple[str, ...] = ("X", "Y", "Z")
 _AXES_WITH_SIGN: Tuple[str, ...] = ("X", "Y", "Z", "-X", "-Y", "-Z")
 
 
+def _strip_duplicate_suffix(name: str) -> str:
+    if name.endswith("_D"):
+        return name[:-2]
+    return name
+
+
+def _extract_lr_identifier(name: str) -> Optional[str]:
+    stripped = _strip_duplicate_suffix(name)
+    tokens = [token for token in stripped.split("_") if token]
+    for token in reversed(tokens):
+        upper = token.upper()
+        if upper in ("L", "R"):
+            return upper
+    return None
+
+
 def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         lowered = value.strip().lower()
@@ -243,6 +259,7 @@ def _create_standard_twist_chain(
     twist_rotate_attr = ".rotate" + twist_axis
     driver_rotate_attr = ".rotate" + driver_axis
     other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
+    twist_short_base = _strip_duplicate_suffix(start_short)
 
     pma_sub = cmds.createNode("plusMinusAverage", n=f"{base_tag}_twistDelta_PMA")
     cmds.setAttr(pma_sub + ".operation", 2)  # subtract
@@ -420,7 +437,7 @@ def _create_standard_twist_chain(
         ratio = float(step_index) / float(count + 1)
 
         suffix = f"{step_index:02d}"
-        jnt_name = f"{start_short}_twist{suffix}"
+        jnt_name = f"{twist_short_base}_twist{suffix}"
         j = cmds.duplicate(start, po=True, n=jnt_name)[0]
 
         if cmds.attributeQuery("radius", node=j, exists=True):
@@ -567,6 +584,7 @@ def _create_reverse_twist_chain(
     twist_rotate_attr = ".rotate" + twist_axis
     driver_rotate_attr = ".rotate" + driver_axis
     other_axes = tuple(ax for ax in _AXES if ax != twist_axis)
+    twist_short_base = _strip_duplicate_suffix(start_short)
 
     abs_neg = cmds.createNode("multDoubleLinear", n=f"{base_tag}_twistAbsNeg_MDL")
     cmds.setAttr(abs_neg + ".input2", -1)
@@ -588,7 +606,7 @@ def _create_reverse_twist_chain(
 
     created = []
 
-    root_name = f"{start_short}_twistRoot"
+    root_name = f"{twist_short_base}_twistRoot"
     root = cmds.duplicate(start, po=True, n=root_name)[0]
 
     if cmds.attributeQuery("radius", node=root, exists=True):
@@ -633,7 +651,7 @@ def _create_reverse_twist_chain(
     for idx in range(1, count + 1):
         ratio = float(idx) / float(count + 1)
         suffix = f"{idx:02d}"
-        jnt_name = f"{start_short}_twist{suffix}"
+        jnt_name = f"{twist_short_base}_twist{suffix}"
         j = cmds.duplicate(start, po=True, n=jnt_name)[0]
 
         if cmds.attributeQuery("radius", node=j, exists=True):
@@ -1194,9 +1212,8 @@ def _find_joint_by_short_name(base_joint, short_name):
 
 
 def _find_reverse_twist_root(base_joint):
-    base_short = base_joint.split("|")[-1]
-    if base_short.endswith("_D"):
-        base_short = base_short[:-2]
+    base_short = _strip_duplicate_suffix(base_joint.split("|")[-1])
+    base_identifier = _extract_lr_identifier(base_short)
     candidate_short = base_short + "_twistRoot"
     # Prefer siblings that contain "twistRoot" in their name and share the same parent
     parent = cmds.listRelatives(base_joint, p=True, pa=True) or []
@@ -1212,16 +1229,28 @@ def _find_reverse_twist_root(base_joint):
         if not sibling or sibling == base_long:
             continue
         short_name = sibling.split("|")[-1]
-        if short_name == candidate_short:
+        sibling_identifier = _extract_lr_identifier(short_name)
+        if base_identifier and sibling_identifier and sibling_identifier != base_identifier:
+            continue
+        if _strip_duplicate_suffix(short_name) == candidate_short:
             return sibling
 
     for sibling in siblings:
         if not sibling or sibling == base_long:
             continue
-        if "twistroot" in sibling.split("|")[-1].lower():
+        short_name = sibling.split("|")[-1]
+        sibling_identifier = _extract_lr_identifier(short_name)
+        if base_identifier and sibling_identifier and sibling_identifier != base_identifier:
+            continue
+        if "twistroot" in short_name.lower():
             return sibling
 
-    return _find_joint_by_short_name(base_joint, candidate_short)
+    candidate = _find_joint_by_short_name(base_joint, candidate_short)
+    if candidate and base_identifier:
+        candidate_identifier = _extract_lr_identifier(candidate.split("|")[-1])
+        if candidate_identifier and candidate_identifier != base_identifier:
+            return None
+    return candidate
 
 
 if QtWidgets is not None:
