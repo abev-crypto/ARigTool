@@ -200,12 +200,12 @@ def _create_half_rotation_joint_internal(
     qte_name = _uniquify("qte_%s_half" % base)
     qte = cmds.createNode("quatToEuler", n=qte_name)
     for axis, value in zip(("X", "Y", "Z", "W"), (0, 0, 0, 1)):
-        cmds.setAttr(qsl + f".inputQuat2{axis}", value)
-    cmds.setAttr(qsl + ".t", 0.5)
+        cmds.setAttr(qsl + f".input2Quat{axis}", value)
+    cmds.setAttr(qsl + ".inputT", 0.5)
     for axis in ("X", "Y", "Z"):
         cmds.connectAttr(base_joint + f".rotate{axis}", etq + f".inputRotate{axis}", f=True)
     for axis in ("X", "Y", "Z", "W"):
-        cmds.connectAttr(etq + f".outputQuat{axis}", qsl + f".inputQuat1{axis}", f=True)
+        cmds.connectAttr(etq + f".outputQuat{axis}", qsl + f".input1Quat{axis}", f=True)
         cmds.connectAttr(qsl + f".outputQuat{axis}", qte + f".inputQuat{axis}", f=True)
     for ax in ("X", "Y", "Z"):
         dst_plug = f"{half}.rotate{ax}"
