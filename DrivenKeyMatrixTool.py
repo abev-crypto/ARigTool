@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from PySide2 import QtCore, QtGui, QtWidgets
 import maya.cmds as cmds
@@ -98,6 +98,21 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             "選択行のOutput値を、現在のジョイントのアトリビュート値で更新します。"
         )
 
+        self.quick_value_label = QtWidgets.QLabel("Quick Set:")
+        self.quick_value_buttons: List[QtWidgets.QPushButton] = []
+        for value in (0, 1, 2, 3, 10, 45, 90):
+            button = QtWidgets.QPushButton(str(value))
+            button.setProperty("quickValue", float(value))
+            button.setToolTip(
+                "選択したInput/Outputセルに素早く値を適用します。\n"
+                "クリック: 指定値に設定 / Shift+クリック: 加算 / "
+                "Ctrl+クリック: 乗算 (Alt併用で除算) / Alt+クリック: 符号反転"
+            )
+            button.clicked.connect(
+                lambda _checked=False, v=float(value): self._apply_quick_value(v)
+            )
+            self.quick_value_buttons.append(button)
+
         self.auto_mirror_checkbox = QtWidgets.QCheckBox("Mirror to opposite joints automatically")
         self.auto_mirror_checkbox.setToolTip(
             "オンの場合、値を変更した際にミラー側のジョイントにも自動で反映します。"
@@ -142,6 +157,12 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         controls_layout.addWidget(self.collect_button)
         controls_layout.addStretch(1)
 
+        quick_layout = QtWidgets.QHBoxLayout()
+        quick_layout.addWidget(self.quick_value_label)
+        for button in self.quick_value_buttons:
+            quick_layout.addWidget(button)
+        quick_layout.addStretch(1)
+
         mirror_layout = QtWidgets.QHBoxLayout()
         mirror_layout.addWidget(self.auto_mirror_checkbox)
         mirror_layout.addStretch(1)
@@ -149,6 +170,7 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         mirror_layout.addWidget(self.close_button)
 
         main_layout.addLayout(controls_layout)
+        main_layout.addLayout(quick_layout)
         main_layout.addLayout(mirror_layout)
         main_layout.addWidget(self.table_widget)
         main_layout.addWidget(self.info_label)
@@ -497,10 +519,18 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         connections = cmds.listConnections(
             joint, s=True, d=False, c=True, p=True, scn=True
         ) or []
-        for source_plug, dest_plug in zip(connections[0::2], connections[1::2]):
+        joint_long = cmds.ls(joint, l=True) or [joint]
+        joint_name = joint_long[0]
+        for first_plug, second_plug in zip(connections[0::2], connections[1::2]):
+            source_plug, dest_plug = self._normalize_connection_pair(
+                first_plug, second_plug, joint_name
+            )
             attribute = ""
             if "." in dest_plug:
-                _, attribute = dest_plug.split(".", 1)
+                dest_node, attribute = dest_plug.split(".", 1)
+                dest_long = cmds.ls(dest_node, l=True) or [dest_node]
+                if dest_long[0] != joint_name:
+                    attribute = ""
             source_node = source_plug.split(".", 1)[0]
             source_long = cmds.ls(source_node, l=True) or [source_node]
             source_name = source_long[0]
@@ -510,7 +540,9 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             if node_type in ANIM_CURVE_TYPES:
                 anim_curves.append((source_name, attribute))
             elif node_type == "blendWeighted":
-                anim_curves.extend(self._gather_anim_curves_from_blend(source_name, attribute))
+                anim_curves.extend(
+                    self._gather_anim_curves_from_blend(source_name, attribute)
+                )
         return anim_curves
 
     def _gather_anim_curves_from_blend(
@@ -520,7 +552,12 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         connections = cmds.listConnections(
             blend_node, s=True, d=False, c=True, p=True, scn=True
         ) or []
-        for source_plug, _ in zip(connections[0::2], connections[1::2]):
+        blend_long = cmds.ls(blend_node, l=True) or [blend_node]
+        blend_name = blend_long[0]
+        for first_plug, second_plug in zip(connections[0::2], connections[1::2]):
+            source_plug, _ = self._normalize_connection_pair(
+                first_plug, second_plug, blend_name
+            )
             source_node = source_plug.split(".", 1)[0]
             source_long = cmds.ls(source_node, l=True) or [source_node]
             source_name = source_long[0]
@@ -530,6 +567,33 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             if node_type in ANIM_CURVE_TYPES:
                 anim_curves.append((source_name, attribute))
         return anim_curves
+
+    def _normalize_connection_pair(
+        self, plug_a: str, plug_b: str, target_node: str
+    ) -> Tuple[str, str]:
+        """Return a pair of plugs ordered as (source, destination).
+
+        Maya's listConnections can return connection pairs in either order when
+        requesting the plugs, which caused the driven key discovery to fail when
+        the destination plug (the joint attribute) appeared first. This helper
+        ensures that the returned tuple is always ordered with the source plug
+        first by comparing the connected node to *target_node*.
+        """
+
+        def _long_name(node: str) -> str:
+            return (cmds.ls(node, l=True) or [node])[0]
+
+        plug_a_node = plug_a.split(".", 1)[0]
+        plug_b_node = plug_b.split(".", 1)[0]
+        plug_a_long = _long_name(plug_a_node)
+        plug_b_long = _long_name(plug_b_node)
+        target_long = _long_name(target_node)
+
+        if plug_b_long == target_long and plug_a_long != target_long:
+            return plug_a, plug_b
+        if plug_a_long == target_long and plug_b_long != target_long:
+            return plug_b, plug_a
+        return plug_a, plug_b
 
     def _anim_curve_attribute(self, joint: str, anim_curve: str) -> str:
         outputs = cmds.listConnections(
@@ -679,6 +743,35 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         entry = self._row_entries[row]
         self._apply_input_preview(entry)
 
+    def _apply_entry_value_change(
+        self, entry: DrivenKeyEntry, column: int, value: float
+    ) -> Tuple[bool, bool]:
+        try:
+            if column == self.COLUMN_INPUT:
+                cmds.keyframe(
+                    entry.anim_curve,
+                    index=(entry.key_index, entry.key_index),
+                    edit=True,
+                    float=(value,),
+                )
+                entry.input_value = value
+            else:
+                cmds.keyframe(
+                    entry.anim_curve,
+                    index=(entry.key_index, entry.key_index),
+                    edit=True,
+                    valueChange=value,
+                )
+                entry.output_value = value
+        except Exception as exc:  # pragma: no cover - Maya依存のため
+            self.info_label.setText(f"キー更新中にエラー: {exc}")
+            return False, False
+
+        mirrored = False
+        if self.auto_mirror_checkbox.isChecked():
+            mirrored = self._update_mirror_entry(entry, {column: value})
+        return True, mirrored
+
     def _on_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
         column = item.column()
         if column not in (self.COLUMN_INPUT, self.COLUMN_OUTPUT):
@@ -700,37 +793,15 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
         joint_label = _short_name(entry.joint)
         attribute_label = entry.attribute
         message: Optional[str] = None
-        try:
-            if column == self.COLUMN_INPUT:
-                cmds.keyframe(
-                    entry.anim_curve,
-                    index=(entry.key_index, entry.key_index),
-                    edit=True,
-                    float=(value,),
-                )
-                entry.input_value = value
-            else:
-                cmds.keyframe(
-                    entry.anim_curve,
-                    index=(entry.key_index, entry.key_index),
-                    edit=True,
-                    valueChange=value,
-                )
-                entry.output_value = value
-            if self.auto_mirror_checkbox.isChecked():
-                mirrored = self._update_mirror_entry(entry, {column: value})
-                if mirrored:
-                    message = (
-                        f"{joint_label}.{attribute_label} とミラー側のキーを更新しました。"
-                    )
-                else:
-                    message = (
-                        f"{joint_label}.{attribute_label} のキーを更新しました。(ミラーなし)"
-                    )
-        except Exception as exc:  # pragma: no cover - Maya依存のため
-            self.info_label.setText(f"キー更新中にエラー: {exc}")
+        success, mirrored = self._apply_entry_value_change(entry, column, value)
+        if not success:
             self._restore_item_value(row, column, entry)
             return
+        if self.auto_mirror_checkbox.isChecked():
+            if mirrored:
+                message = f"{joint_label}.{attribute_label} とミラー側のキーを更新しました。"
+            else:
+                message = f"{joint_label}.{attribute_label} のキーを更新しました。(ミラーなし)"
 
         self.refresh_from_selection()
         if message is None:
@@ -751,6 +822,82 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
                 item.setData(QtCore.Qt.EditRole, value)
         finally:
             self.table_widget.blockSignals(False)
+
+    def _apply_quick_value(self, amount: float) -> None:
+        if not self._row_entries:
+            self.info_label.setText("先にRefreshしてドリブンキーを取得してください。")
+            return
+
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is None:
+            self.info_label.setText("値を変更するセルを選択してください。")
+            return
+
+        indexes = [
+            index
+            for index in selection_model.selectedIndexes()
+            if index.column() in (self.COLUMN_INPUT, self.COLUMN_OUTPUT)
+        ]
+        if not indexes:
+            self.info_label.setText("InputまたはOutputセルを選択してください。")
+            return
+
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        has_ctrl = bool(modifiers & QtCore.Qt.ControlModifier)
+        has_shift = bool(modifiers & QtCore.Qt.ShiftModifier)
+        has_alt = bool(modifiers & QtCore.Qt.AltModifier)
+
+        processed = 0
+        mirror_updates = 0
+        division_errors = 0
+
+        for index in sorted(indexes, key=lambda i: (i.row(), i.column())):
+            row = index.row()
+            column = index.column()
+            if not (0 <= row < len(self._row_entries)):
+                continue
+            entry = self._row_entries[row]
+            current = (
+                entry.input_value
+                if column == self.COLUMN_INPUT
+                else entry.output_value
+            )
+
+            if has_ctrl:
+                if amount == 0:
+                    division_errors += 1
+                    continue
+                if has_alt:
+                    new_value = current / amount
+                else:
+                    new_value = current * amount
+            elif has_shift:
+                new_value = current + amount
+            else:
+                new_value = amount
+
+            if has_alt and not has_ctrl:
+                new_value = -new_value
+
+            success, mirrored = self._apply_entry_value_change(entry, column, new_value)
+            if not success:
+                continue
+            processed += 1
+            if mirrored:
+                mirror_updates += 1
+
+        if processed:
+            self.refresh_from_selection()
+            message = f"{processed} 件のセルを更新しました。"
+            if mirror_updates:
+                message += f" (ミラー {mirror_updates} 件)"
+            if division_errors:
+                message += f" / 除算できなかったセル {division_errors} 件"
+            self.info_label.setText(message)
+        else:
+            if division_errors:
+                self.info_label.setText("0に対して除算はできません。")
+            # それ以外の場合はエラーメッセージは既に設定済み
 
     # ------------------------------------------------------------------
     def _find_entry_for_anim_curve(
@@ -891,15 +1038,34 @@ class DrivenKeyMatrixDialog(QtWidgets.QDialog):
             self.info_label.setText("ミラー更新対象がありません。")
             return
 
-        rows = {index.row() for index in self.table_widget.selectionModel().selectedRows()}
+        selection_model = self.table_widget.selectionModel()
+        if selection_model is None:
+            self.info_label.setText("ミラー対象の行を選択してください。")
+            return
+
+        rows = {index.row() for index in selection_model.selectedRows()}
         if not rows:
             rows = set(range(len(self._row_entries)))
 
-        updated = 0
+        entries_by_curve: Dict[str, List[DrivenKeyEntry]] = {}
+        for entry in self._row_entries:
+            entries_by_curve.setdefault(entry.anim_curve, []).append(entry)
+
+        targets: List[DrivenKeyEntry] = []
+        seen_keys: Set[Tuple[str, int]] = set()
         for row in sorted(rows):
             if not (0 <= row < len(self._row_entries)):
                 continue
             entry = self._row_entries[row]
+            for candidate in entries_by_curve.get(entry.anim_curve, []):
+                key = (candidate.anim_curve, candidate.key_index)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                targets.append(candidate)
+
+        updated = 0
+        for entry in targets:
             values = {
                 self.COLUMN_INPUT: entry.input_value,
                 self.COLUMN_OUTPUT: entry.output_value,
